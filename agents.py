@@ -1,0 +1,170 @@
+"""
+agents/agents.py
+
+All 4 CrewAI agents for the migration pipeline.
+
+KEY CHANGES from 0.28.8 → 1.9.3:
+  1. LLM:     from crewai import LLM  (NOT langchain_openai.ChatOpenAI)
+  2. verbose: True/False only  (NOT 0/1/2)
+  3. manager_agent is ONLY for Process.hierarchical — removed from here,
+     handled in main.py with Process.sequential
+"""
+
+from crewai import Agent, LLM             # ← LLM is now from crewai directly
+
+from migration_tools import (
+    get_developer_tools,
+    get_tester_tools,
+    get_critic_tools,
+)
+
+
+def create_llm(model: str = "gpt-4o", temperature: float = 0.1) -> LLM:
+    """
+    CrewAI 1.x uses its own LLM wrapper backed by LiteLLM.
+    Low temperature = more deterministic code output.
+    """
+    return LLM(model=model, temperature=temperature)
+
+
+def create_all_agents(
+    model: str = "gpt-4o",
+    legacy_path: str = "./legacy_sample",
+    output_path: str = "./output/MigratedApp",
+) -> dict:
+    """
+    Factory — creates and returns all 4 agents as a dict.
+    Call once from main.py.
+    """
+    llm = create_llm(model)
+
+    # ──────────────────────────────────────────────
+    # Agent 1: Manager
+    # Orchestrates the crew — reads reports, makes
+    # the final COMPLETE / INCOMPLETE decision.
+    # NO tools. Does zero actual coding work.
+    # ──────────────────────────────────────────────
+    manager = Agent(
+        role="Migration Project Manager",
+        goal=(
+            "Coordinate the full migration of a legacy ASP.NET MVC application to .NET Core 8. "
+            "Delegate work to the Developer, Tester, and Critic. "
+            "Collect their reports and decide when the migration meets the 90% quality threshold. "
+            "If the Tester reports failures or the Critic scores below 80, "
+            "flag issues clearly for the Developer to fix."
+        ),
+        backstory=(
+            "You are a senior technical project manager with 15 years of experience "
+            "overseeing .NET migration projects for enterprise clients. "
+            "You never write code yourself — your job is to orchestrate, read reports, "
+            "and make the final quality call. "
+            "You do not accept a migration as complete unless the Tester passes at least "
+            "6 out of 7 tests AND the Critic scores the code 80 or above out of 100."
+        ),
+        llm=llm,
+        tools=[],                  # Manager has no tools — coordinates only
+        allow_delegation=True,
+        verbose=True,
+        max_iter=5,
+    )
+
+    # ──────────────────────────────────────────────
+    # Agent 2: Developer / Analyzer
+    # Phase 1 — Reads and maps the legacy project
+    # Phase 2 — Writes the full .NET Core 8 project
+    # ──────────────────────────────────────────────
+    developer = Agent(
+        role="Senior .NET Migration Developer",
+        goal=(
+            f"Analyze the legacy ASP.NET MVC project at '{legacy_path}', "
+            f"then generate a complete working .NET Core 8 MVC CRUD application at '{output_path}'. "
+            "Migrate all controllers, views, models, EF Core DbContext, "
+            "appsettings.json, and Program.cs. "
+            "Fix any issues reported by the Tester or Critic."
+        ),
+        backstory=(
+            "You are a .NET expert who has migrated hundreds of legacy ASP.NET apps to .NET Core. "
+            "You know every breaking change between ASP.NET MVC 5 and ASP.NET Core 8 by heart:\n"
+            "- System.Web is gone → use Microsoft.AspNetCore.Mvc\n"
+            "- HttpContext.Current is gone → use IHttpContextAccessor\n"
+            "- Web.config is gone → use appsettings.json + IConfiguration\n"
+            "- RouteConfig.cs is gone → use Program.cs MapControllerRoute\n"
+            "- EF6 DbContext → EF Core DbContext with OnModelCreating\n"
+            "- Html.BeginForm() → <form asp-action=''> tag helpers\n"
+            "You always use async/await, constructor-injected DbContext, "
+            "and never hardcode connection strings."
+        ),
+        llm=llm,
+        tools=get_developer_tools(),
+        allow_delegation=False,
+        verbose=True,
+        max_iter=10,
+    )
+
+    # ──────────────────────────────────────────────
+    # Agent 3: Tester
+    # Writes xUnit tests, runs dotnet test,
+    # reports PASS/FAIL for every CRUD operation
+    # ──────────────────────────────────────────────
+    tester = Agent(
+        role="QA Engineer — .NET Core Migration Tester",
+        goal=(
+            f"Write xUnit tests for the migrated .NET Core 8 app at '{output_path}'. "
+            "Run the tests with dotnet test. "
+            "Verify Create, Read, Update, Delete all work correctly. "
+            "Report a clear PASS/FAIL list for every test. "
+            "If tests fail, explain exactly what broke so the Developer can fix it."
+        ),
+        backstory=(
+            "You are a QA automation engineer specialising in .NET Core testing. "
+            "You write clean xUnit tests following AAA (Arrange / Act / Assert). "
+            "You use Microsoft.EntityFrameworkCore.InMemory so tests run without a "
+            "real SQL Server — no infrastructure required. "
+            "Your test report always lists: test name, PASS or FAIL, "
+            "and the exact error message if it failed."
+        ),
+        llm=llm,
+        tools=get_tester_tools(),
+        allow_delegation=False,
+        verbose=True,
+        max_iter=8,
+    )
+
+    # ──────────────────────────────────────────────
+    # Agent 4: Critic / Code Reviewer
+    # Reviews code quality, scores 0–100,
+    # lists issues by severity
+    # ──────────────────────────────────────────────
+    critic = Agent(
+        role="Senior .NET Code Reviewer",
+        goal=(
+            f"Review all migrated .NET Core 8 code at '{output_path}'. "
+            "Check for deprecated APIs, bad DI wiring, wrong middleware order, "
+            "hardcoded secrets, missing error handling, and bad Razor syntax. "
+            "Score the migration 0–100 and list every issue with severity "
+            "(HIGH / MEDIUM / LOW). "
+            "A score of 80+ means the migration is acceptable to ship."
+        ),
+        backstory=(
+            "You are a principal .NET engineer who reviews code for Fortune 500 clients. "
+            "You know every common migration mistake:\n"
+            "- app.UseRouting() missing before app.UseAuthorization()\n"
+            "- DbContext registered with wrong lifetime (should be Scoped)\n"
+            "- Synchronous EF calls instead of async (SaveChanges vs SaveChangesAsync)\n"
+            "- Html.* helpers left in Razor views instead of tag helpers\n"
+            "- Connection strings left in Web.config instead of appsettings.json\n"
+            "Your reviews are structured, scored numerically, and fully actionable."
+        ),
+        llm=llm,
+        tools=get_critic_tools(),
+        allow_delegation=False,
+        verbose=True,
+        max_iter=6,
+    )
+
+    return {
+        "manager":   manager,
+        "developer": developer,
+        "tester":    tester,
+        "critic":    critic,
+    }
