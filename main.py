@@ -58,7 +58,6 @@ def run_migration(legacy_path: str, output_path: str) -> str:
         model=config.llm_model,
         legacy_path=config.legacy_project_path,
         output_path=config.output_project_path,
-        rpm=config.llm_rpm,
         max_tokens=config.llm_max_tokens,
     )
 
@@ -90,6 +89,7 @@ def run_migration(legacy_path: str, output_path: str) -> str:
         process=Process.sequential,   # Tasks run one after another in order
         verbose=config.verbose,       # bool from pydantic-settings
         memory=config.use_memory,     # False by default — saves embedding API calls
+        max_rpm=config.llm_rpm,       # Rate limit here, NOT on LLM() — CrewAI RPMController
     )
 
     # ── Kick off ─────────────────────────────────

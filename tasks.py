@@ -108,7 +108,9 @@ The PAGES/CONTROLLERS section must list every page event or action.
         description=f"""
 Using the Migration Analysis Report from Task 1, generate a complete .NET Core 8 MVC CRUD application.
 
-IMPORTANT: Use write_batch_files to write ALL files in ONE call (dict of file_path → content).
+IMPORTANT: Use write_batch_files to write ALL files in ONE call.
+Pass a list of objects, each with "path" and "content" fields:
+  [{{"path": "./output/App/Program.cs", "content": "..."}}, {{"path": "./output/App/appsettings.json", "content": "..."}}, ...]
 Do NOT call write_file separately for each file — one batch call saves API quota.
 Output path: {output_path}
 
@@ -263,7 +265,7 @@ Steps:
 1. list_files on {output_path} to understand the project structure
 2. Read all Controller files and Model files using read_multiple_files
 
-3. Use write_batch_files to write BOTH test files in one call:
+3. Use write_batch_files to write BOTH test files in one call (list of {{path, content}} objects):
 
    File 1: {output_path}.Tests/{project_name}.Tests.csproj
    Must reference:

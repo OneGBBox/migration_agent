@@ -49,11 +49,17 @@ class ReadMultipleFilesInput(BaseModel):
         description="List of file paths to read at once")
 
 
+class FileEntry(BaseModel):
+    path: str = Field(description="File path to write")
+    content: str = Field(description="Full content of the file")
+
+
 class WriteBatchFilesInput(BaseModel):
-    files: dict[str, str] = Field(
+    files: list[FileEntry] = Field(
         description=(
-            "Dictionary mapping file_path → content for every file to write. "
-            "Example: {'./output/App/Program.cs': '...', './output/App/appsettings.json': '...'}"
+            "List of files to write, each with 'path' and 'content' fields. "
+            "Example: [{'path': './output/App/Program.cs', 'content': '...'}, "
+            "{'path': './output/App/appsettings.json', 'content': '...'}]"
         )
     )
 
@@ -124,7 +130,7 @@ class ListFilesTool(BaseTool):
             files = list(base.rglob("*"))
             if extension:
                 files = [f for f in files if f.suffix == extension]
-            result = [str(f.relative_to(base)) for f in files if f.is_file()]
+            result = [f.as_posix() for f in files if f.is_file()]
             return "\n".join(result) if result else "No files found."
         except Exception as e:
             return f"ERROR listing files: {str(e)}"
@@ -214,9 +220,17 @@ class WriteBatchFilesTool(BaseTool):
     )
     args_schema: Type[BaseModel] = WriteBatchFilesInput
 
-    def _run(self, files: dict[str, str]) -> str:
+    def _run(self, files: list) -> str:
         results = []
-        for file_path, content in files.items():
+        for entry in files:
+            # Handle both FileEntry instances (from CrewAI validation)
+            # and plain dicts (from direct test calls or raw agent output)
+            if isinstance(entry, dict):
+                file_path = entry.get("path", "")
+                content = entry.get("content", "")
+            else:
+                file_path = entry.path
+                content = entry.content
             try:
                 path = Path(file_path)
                 path.parent.mkdir(parents=True, exist_ok=True)

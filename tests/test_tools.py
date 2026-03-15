@@ -231,28 +231,28 @@ class TestToolGetters:
 
 class TestWriteBatchFilesTool:
     def test_writes_multiple_files(self, tmp_path):
-        files = {
-            str(tmp_path / "a.cs"): "class A {}",
-            str(tmp_path / "b.json"): '{"key": "value"}',
-        }
+        files = [
+            {"path": str(tmp_path / "a.cs"), "content": "class A {}"},
+            {"path": str(tmp_path / "b.json"), "content": '{"key": "value"}'},
+        ]
         result = WriteBatchFilesTool()._run(files)
         assert "SUCCESS" in result
         assert (tmp_path / "a.cs").read_text() == "class A {}"
         assert (tmp_path / "b.json").read_text() == '{"key": "value"}'
 
     def test_creates_parent_directories(self, tmp_path):
-        files = {str(tmp_path / "Controllers" / "HomeController.cs"): "class C {}"}
+        files = [{"path": str(tmp_path / "Controllers" / "HomeController.cs"), "content": "class C {}"}]
         WriteBatchFilesTool()._run(files)
         assert (tmp_path / "Controllers" / "HomeController.cs").exists()
 
     def test_summary_line_shows_count(self, tmp_path):
-        files = {
-            str(tmp_path / "f1.cs"): "x",
-            str(tmp_path / "f2.cs"): "y",
-        }
+        files = [
+            {"path": str(tmp_path / "f1.cs"), "content": "x"},
+            {"path": str(tmp_path / "f2.cs"), "content": "y"},
+        ]
         result = WriteBatchFilesTool()._run(files)
         assert "2/2 files written successfully" in result
 
-    def test_empty_dict_returns_summary(self):
-        result = WriteBatchFilesTool()._run({})
+    def test_empty_list_returns_summary(self):
+        result = WriteBatchFilesTool()._run([])
         assert "0/0 files written successfully" in result
