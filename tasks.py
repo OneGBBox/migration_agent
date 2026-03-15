@@ -44,13 +44,13 @@ NOTE: This project may be Web Forms (.aspx/.aspx.cs), ASP.NET MVC (Controllers/)
 Do NOT assume a folder structure — discover it by reading the actual files.
 
 Follow these steps exactly:
-1. Use list_files on {legacy_path} to see every file
-2. Read Web.config — extract connection string name, server, database
-3. Read every .cs file found (code-behinds, models, data access, global.asax)
-4. Read every .aspx, .cshtml, or .aspx.cs file found (pages/views)
-5. Read Global.asax or Global.asax.cs for startup logic
-6. Read every file in the Models/ folder (or equivalent)
-7. Read every file in any Data/ folder (DbContext, ADO.NET helpers)
+1. Call list_files on "{legacy_path}" to discover every file.
+   list_files returns FULL paths (e.g. "legacy_sample/LegacyInventory/Web.config").
+   NEVER construct or guess file paths — use ONLY paths returned by list_files.
+
+2. From the list_files output, identify ALL file paths. Then call read_multiple_files
+   with the COMPLETE list of paths at once. Do not read files one at a time.
+   Use the EXACT paths from list_files — do not shorten, modify, or reconstruct them.
 
 Produce a Migration Analysis Report with these exact sections:
 
