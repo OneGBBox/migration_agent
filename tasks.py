@@ -38,46 +38,64 @@ def create_tasks(agents: dict, legacy_path: str, output_path: str) -> list[Task]
     # ──────────────────────────────────────────────
     task_analyze = Task(
         description=f"""
-Analyze the legacy ASP.NET MVC project located at: {legacy_path}
+Analyze the legacy ASP.NET project located at: {legacy_path}
+
+NOTE: This project may be Web Forms (.aspx/.aspx.cs), ASP.NET MVC (Controllers/), or a mix.
+Do NOT assume a folder structure — discover it by reading the actual files.
 
 Follow these steps exactly:
-1. Use list_files on {legacy_path} to see all files
-2. Read Web.config — extract connection strings and app settings
-3. Read every .cs file in Controllers/ folder
-4. Read every .cs file in Models/ folder
-5. Read every .cshtml or .aspx file in Views/
-6. Read App_Start/RouteConfig.cs or Global.asax for routing config
+1. Use list_files on {legacy_path} to see every file
+2. Read Web.config — extract connection string name, server, database
+3. Read every .cs file found (code-behinds, models, data access, global.asax)
+4. Read every .aspx, .cshtml, or .aspx.cs file found (pages/views)
+5. Read Global.asax or Global.asax.cs for startup logic
+6. Read every file in the Models/ folder (or equivalent)
+7. Read every file in any Data/ folder (DbContext, ADO.NET helpers)
 
 Produce a Migration Analysis Report with these exact sections:
 
 ## PROJECT SUMMARY
-What the app does. Number of controllers, models, views.
+What the app does. List every entity/feature. Note if it is Web Forms, MVC, or mixed.
 
 ## DATABASE
-Table names found. Connection string format from Web.config.
+All table names inferred from models or raw SQL found. Connection string from Web.config.
+Note if it uses EF6, pure ADO.NET (SqlConnection/SqlCommand), or both.
 
-## CONTROLLERS
-List every controller, every action method, its HTTP verb (GET/POST), and its return type.
+## ENTITIES AND DATA ACCESS PATTERNS
+For each entity (e.g. Product, Category):
+- All properties and data types
+- Any foreign key relationships between entities
+- Whether it uses EF6, pure ADO.NET, or both
 
-## VIEWS
-List every view file and which model it binds to.
+## PAGES / CONTROLLERS
+For each page or controller found:
+- File name and class name
+- Every action method / page event (Page_Load, btnSave_Click, etc.)
+- HTTP verb if determinable (GET=Page_Load+!IsPostBack, POST=button click events)
+- What data it reads or writes
 
 ## MIGRATION MAPPING
 For each legacy piece, state the exact .NET Core 8 equivalent:
-e.g. RouteConfig.cs → Program.cs MapControllerRoute
-     Web.config connectionStrings → appsettings.json ConnectionStrings
-     Html.BeginForm() → <form asp-action="">
-     EF6 DbContext → EF Core DbContext
-     System.Web.Mvc → Microsoft.AspNetCore.Mvc
+  Web Forms Page       → MVC Controller + Razor View
+  Page_Load(!IsPostBack) → [HttpGet] action
+  btnSave_Click        → [HttpPost] action with [ValidateAntiForgeryToken]
+  Response.Redirect()  → RedirectToAction()
+  Request.QueryString  → int id route parameter
+  System.Configuration.ConfigurationManager → IConfiguration / appsettings.json
+  System.Data.SqlClient (ADO.NET) → EF Core DbContext with async LINQ
+  EF6 DbContext        → EF Core 8 DbContext
+  Web.config           → appsettings.json
+  Global.asax          → Program.cs
 
 ## BREAKING CHANGES
-List every pattern found in the legacy code that does NOT exist in .NET Core 8.
-Include file name and line context for each one.
+List every pattern that does NOT exist in .NET Core 8.
+Include file name and line context for each.
         """,
         expected_output="""
-A complete Migration Analysis Report with all 6 sections filled in:
-PROJECT SUMMARY, DATABASE, CONTROLLERS, VIEWS, MIGRATION MAPPING, BREAKING CHANGES.
-Each section must reference actual files and code found in the legacy project.
+A complete Migration Analysis Report with all 6 sections filled in.
+Every section must reference actual file names and code found in the legacy project.
+The ENTITIES section must list every property and every foreign key relationship.
+The PAGES/CONTROLLERS section must list every page event or action.
         """,
         agent=developer,
     )
@@ -90,11 +108,15 @@ Each section must reference actual files and code found in the legacy project.
         description=f"""
 Using the Migration Analysis Report from Task 1, generate a complete .NET Core 8 MVC CRUD application.
 
-IMPORTANT: Use write_batch_files to write ALL files in a single call (pass a dict of file_path → content).
+IMPORTANT: Use write_batch_files to write ALL files in ONE call (dict of file_path → content).
 Do NOT call write_file separately for each file — one batch call saves API quota.
 Output path: {output_path}
 
-FILES TO GENERATE (include all in the single write_batch_files call):
+═══════════════════════════════════════════════════════
+FILES TO GENERATE
+Generate a file for EVERY entity discovered in Task 1.
+The legacy project has at least: Category and Product (with Category foreign key).
+═══════════════════════════════════════════════════════
 
 ── {output_path}/{project_name}.csproj ──
 <Project Sdk="Microsoft.NET.Sdk.Web">
@@ -110,8 +132,8 @@ FILES TO GENERATE (include all in the single write_batch_files call):
 </Project>
 
 ── {output_path}/appsettings.json ──
-Use the connection string from the legacy Web.config.
-Replace actual credentials with placeholder: Server=localhost;Database=ProductsDb;...
+Use connection string name and database from the legacy Web.config.
+Replace server with placeholder: Server=localhost;Database=InventoryDB;Trusted_Connection=True;TrustServerCertificate=True;
 
 ── {output_path}/Program.cs ──
 Must include in this order:
@@ -121,45 +143,88 @@ Must include in this order:
   app.UseStaticFiles()
   app.UseRouting()
   app.UseAuthorization()
-  app.MapControllerRoute(name: "default", pattern: "{{controller=Home}}/{{action=Index}}/{{id?}}")
+  app.MapControllerRoute(name: "default", pattern: "{{controller=Products}}/{{action=Index}}/{{id?}}")
 
 ── {output_path}/Data/AppDbContext.cs ──
 EF Core 8 DbContext. Constructor takes DbContextOptions<AppDbContext>.
-DbSet for each model found in legacy project.
+DbSet for EACH model (Category AND Product).
+OnModelCreating: configure Product.Price as decimal(18,2).
 
-── {output_path}/Models/<ModelName>.cs ──
-Clean POCO. Data annotations: [Required], [StringLength], [Range] where appropriate.
-No System.Data or System.Data.Entity imports.
+── {output_path}/Models/Category.cs ──
+public class Category {{
+    public int Id {{ get; set; }}
+    [Required][StringLength(100)] public string Name {{ get; set; }} = string.Empty;
+    [StringLength(500)] public string? Description {{ get; set; }}
+    public ICollection<Product> Products {{ get; set; }} = new List<Product>();
+}}
 
-── {output_path}/Controllers/<Name>Controller.cs ──
-Constructor injection for AppDbContext.
-Actions (all async):
-  Index()        GET  → return View(await _context.Items.ToListAsync())
-  Create()       GET  → return View()
-  Create(model)  POST → validate, add, SaveChangesAsync, RedirectToAction("Index")
-  Edit(id)       GET  → find by id, return View
-  Edit(model)    POST → update entry state, SaveChangesAsync, RedirectToAction("Index")
-  Delete(id)     GET  → find by id, return View
-  DeleteConfirmed(id) POST → remove, SaveChangesAsync, RedirectToAction("Index")
-All POST actions must have [ValidateAntiForgeryToken].
-Return NotFound() instead of HttpNotFound(). Return BadRequest() instead of HttpStatusCodeResult.
+── {output_path}/Models/Product.cs ──
+public class Product {{
+    public int Id {{ get; set; }}
+    [Required][StringLength(200)] public string Name {{ get; set; }} = string.Empty;
+    [StringLength(1000)] public string? Description {{ get; set; }}
+    [Required][Range(0, 999999.99)] public decimal Price {{ get; set; }}
+    [Required][Range(0, int.MaxValue)] public int Stock {{ get; set; }}
+    public int CategoryId {{ get; set; }}
+    public Category? Category {{ get; set; }}
+    public DateTime CreatedAt {{ get; set; }}
+}}
 
-── {output_path}/Views/<Name>/Index.cshtml ──
-Bootstrap 5 table. Use tag helpers: asp-action, asp-controller, asp-route-id.
-No Html.ActionLink(). No Html.DisplayFor() — use @item.PropertyName directly.
+── {output_path}/Controllers/CategoriesController.cs ──
+Constructor injects AppDbContext. All actions are async.
+  Index()              GET  → _context.Categories.ToListAsync()
+  Create()             GET  → return View()
+  Create(model)        POST → validate, Add, SaveChangesAsync, Redirect("Index")
+  Edit(id)             GET  → FindAsync(id), NotFound() if null
+  Edit(id, model)      POST → update state, SaveChangesAsync, Redirect("Index")
+  Delete(id)           GET  → FindAsync(id), NotFound() if null
+  DeleteConfirmed(id)  POST → Remove, SaveChangesAsync, Redirect("Index")
+All POST actions: [ValidateAntiForgeryToken]. Use NotFound() not HttpNotFound().
 
-── {output_path}/Views/<Name>/Create.cshtml ──
-<form asp-action="Create"> tag helper. Use <input asp-for=""> and <span asp-validation-for="">.
-No Html.BeginForm(). No Html.EditorFor().
+── {output_path}/Controllers/ProductsController.cs ──
+Constructor injects AppDbContext. All actions are async.
+  Index()              GET  → _context.Products.Include(p => p.Category).ToListAsync()
+  Create()             GET  → ViewBag.Categories = new SelectList(await _context.Categories.ToListAsync(), "Id", "Name")
+                             return View()
+  Create(model)        POST → set model.CreatedAt = DateTime.UtcNow, validate, Add, SaveChangesAsync, Redirect("Index")
+  Edit(id)             GET  → FindAsync(id), ViewBag.Categories = SelectList, return View
+  Edit(id, model)      POST → update state, SaveChangesAsync, Redirect("Index")
+  Delete(id)           GET  → Include(p => p.Category).FirstOrDefaultAsync(p => p.Id == id)
+  DeleteConfirmed(id)  POST → Remove, SaveChangesAsync, Redirect("Index")
+All POST actions: [ValidateAntiForgeryToken]. Use NotFound() not HttpNotFound().
+Add: using Microsoft.AspNetCore.Mvc.Rendering; for SelectList.
 
-── {output_path}/Views/<Name>/Edit.cshtml ──
-Same pattern as Create but pre-filled. Include hidden <input asp-for="Id">.
+── {output_path}/Views/Categories/Index.cshtml ──
+Bootstrap 5 table. Columns: Name, Description, Edit/Delete links.
+Tag helpers: asp-action, asp-controller, asp-route-id.
 
-── {output_path}/Views/<Name>/Delete.cshtml ──
-Display item details. Confirm delete with <form asp-action="DeleteConfirmed">.
+── {output_path}/Views/Categories/Create.cshtml ──
+<form asp-action="Create">. Fields: Name, Description.
+Use <input asp-for="Name"> and <span asp-validation-for="Name">.
+
+── {output_path}/Views/Categories/Edit.cshtml ──
+Same as Create but pre-filled. Include <input type="hidden" asp-for="Id">.
+
+── {output_path}/Views/Categories/Delete.cshtml ──
+Display Category details. Confirm button posts to DeleteConfirmed.
+
+── {output_path}/Views/Products/Index.cshtml ──
+Bootstrap 5 table. Columns: Name, Category (from Category.Name), Price, Stock, CreatedAt, Edit/Delete links.
+
+── {output_path}/Views/Products/Create.cshtml ──
+<form asp-action="Create">. Fields: Name, Description, Price, Stock.
+Category: <select asp-for="CategoryId" asp-items="ViewBag.Categories"> with a blank first option.
+
+── {output_path}/Views/Products/Edit.cshtml ──
+Same as Create but pre-filled. Include <input type="hidden" asp-for="Id">.
+Category select must pre-select the current CategoryId.
+
+── {output_path}/Views/Products/Delete.cshtml ──
+Display Product details including Category name. Confirm button posts to DeleteConfirmed.
 
 ── {output_path}/Views/Shared/_Layout.cshtml ──
-Bootstrap 5 CDN. Simple nav bar. @RenderBody(). @await RenderSectionAsync("Scripts", required: false)
+Bootstrap 5 CDN. Nav bar with links to /Products and /Categories.
+@RenderBody(). @await RenderSectionAsync("Scripts", required: false).
 
 ── {output_path}/Views/_ViewImports.cshtml ──
 @using {project_name}
@@ -170,16 +235,17 @@ Bootstrap 5 CDN. Simple nav bar. @RenderBody(). @await RenderSectionAsync("Scrip
 @{{ Layout = "_Layout"; }}
 
 RULES — no exceptions:
-- Zero System.Web references
-- Zero HttpContext.Current
-- Zero Web.config (only appsettings.json)
-- All DB calls must be async (ToListAsync, FindAsync, SaveChangesAsync)
-- DbContext injected via constructor only — never new'd up
+- Zero System.Web, System.Data.SqlClient, or System.Configuration references
+- Zero HttpContext.Current, IsPostBack, Page_Load, Response.Redirect
+- Zero Web.config references (only appsettings.json)
+- All DB calls async: ToListAsync, FindAsync, FirstOrDefaultAsync, SaveChangesAsync
+- DbContext injected via constructor only — never new AppDbContext()
+- Use Include() for navigation properties in Index and Delete views
         """,
         expected_output="""
 Confirmation that every file listed above was written successfully.
-Print each file path on its own line.
-Briefly state what each file contains.
+Print each file path on its own line, grouped by folder.
+Confirm: CategoriesController, ProductsController, all 8 views, _Layout, _ViewImports, _ViewStart.
         """,
         agent=developer,
         context=[task_analyze],
@@ -195,41 +261,64 @@ Write and run xUnit tests for the migrated .NET Core 8 app at: {output_path}
 
 Steps:
 1. list_files on {output_path} to understand the project structure
-2. Read the Controller and Model files
+2. Read all Controller files and Model files using read_multiple_files
+
 3. Use write_batch_files to write BOTH test files in one call:
-   - {output_path}.Tests/{project_name}.Tests.csproj
-     Must reference: xunit (2.6.0+), Microsoft.NET.Test.Sdk,
-     xunit.runner.visualstudio, Microsoft.EntityFrameworkCore.InMemory.
-     Must ProjectReference the main app.
-   - {output_path}.Tests/CrudControllerTests.cs
 
-   Setup pattern (use InMemory so no real SQL Server needed):
+   File 1: {output_path}.Tests/{project_name}.Tests.csproj
+   Must reference:
+     xunit (2.6.0+), Microsoft.NET.Test.Sdk, xunit.runner.visualstudio,
+     Microsoft.EntityFrameworkCore.InMemory, Microsoft.AspNetCore.Mvc (for IActionResult)
+   Must ProjectReference: ../{project_name}/{project_name}.csproj
+
+   File 2: {output_path}.Tests/CrudControllerTests.cs
+   Use InMemory DB (no real SQL Server needed):
      var options = new DbContextOptionsBuilder<AppDbContext>()
-         .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
-         .Options;
+         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
      var context = new AppDbContext(options);
-     var controller = new <Name>Controller(context);
 
-   Tests to write (7 total):
-     [Fact] Index_Returns_ViewResult_With_All_Items()
-     [Fact] Create_GET_Returns_Empty_ViewResult()
-     [Fact] Create_POST_Valid_Model_Saves_And_Redirects()
-     [Fact] Create_POST_Invalid_Model_Returns_View_With_Errors()
-     [Fact] Edit_GET_Returns_ViewResult_With_Correct_Item()
-     [Fact] Edit_POST_Valid_Model_Updates_And_Redirects()
-     [Fact] Delete_POST_Removes_Item_And_Redirects()
+   Write tests for BOTH CategoriesController AND ProductsController.
+   For ProductsController tests, seed a Category first (required FK):
+     context.Categories.Add(new Category {{ Id = 1, Name = "Test" }});
+     context.SaveChanges();
 
-5. Run: dotnet test "{output_path}.Tests/" and capture the full output
+   Tests to write (7 for Categories + 7 for Products = 14 total):
+   CategoriesController:
+     [Fact] Categories_Index_Returns_All_Items()
+     [Fact] Categories_Create_GET_Returns_ViewResult()
+     [Fact] Categories_Create_POST_Valid_Saves_And_Redirects()
+     [Fact] Categories_Create_POST_Invalid_Returns_View()
+     [Fact] Categories_Edit_GET_Returns_Correct_Item()
+     [Fact] Categories_Edit_POST_Valid_Updates_And_Redirects()
+     [Fact] Categories_Delete_POST_Removes_And_Redirects()
 
-6. Report PASS/FAIL for each test with exact error if failed
+   ProductsController:
+     [Fact] Products_Index_Returns_All_Items()
+     [Fact] Products_Create_GET_Returns_ViewResult()
+     [Fact] Products_Create_POST_Valid_Saves_And_Redirects()
+     [Fact] Products_Create_POST_Invalid_Returns_View()
+     [Fact] Products_Edit_GET_Returns_Correct_Item()
+     [Fact] Products_Edit_POST_Valid_Updates_And_Redirects()
+     [Fact] Products_Delete_POST_Removes_And_Redirects()
+
+4. Run dotnet build FIRST to catch compile errors before running tests:
+   run_command: dotnet build "{output_path}/{project_name}.csproj"
+   If build FAILS: report the exact compiler error. Do NOT proceed to dotnet test.
+   If build SUCCEEDS: proceed to step 5.
+
+5. Run: dotnet test "{output_path}.Tests/{project_name}.Tests.csproj"
+   Capture the full output.
+
+6. Report PASS/FAIL for each of the 14 tests with exact error if failed
         """,
         expected_output="""
 Test report with:
-- Each test name and its result: PASS or FAIL
+- dotnet build result: PASS or FAIL (with error if failed)
+- Each of 14 test names and its result: PASS or FAIL
 - For FAIL: exact exception message and the line that failed
-- Summary line: "X/7 tests passed"
+- Summary line: "X/14 tests passed"
 - Final recommendation: READY FOR REVIEW or NEEDS FIXES
-  (If NEEDS FIXES: list exactly what the Developer must change)
+  (If NEEDS FIXES: list exactly what the Developer must change, file by file)
         """,
         agent=tester,
         context=[task_migrate],
