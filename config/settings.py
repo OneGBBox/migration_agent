@@ -69,7 +69,8 @@ class MigrationConfig(BaseSettings):
     # anthropic_api_key: str                  # ANTHROPIC_API_KEY (required)
     openai_api_key: str                     # OPENAI_API_KEY (required)
     # ── Optional — sensible defaults if not set in .env ────────────────
-    llm_model: str = "gpt-4o"  # LLM_MODEL
+    llm_model: str = "gpt-4o"              # LLM_MODEL  (Developer + Tester)
+    fast_llm_model: str = "gpt-4o-mini"   # FAST_LLM_MODEL  (Manager + Critic — lighter tasks)
     legacy_project_path: str = "./legacy_sample"              # LEGACY_PROJECT_PATH
     output_project_path: str = ""                             # OUTPUT_PROJECT_PATH (empty = auto-derive)
     max_retry_loops: int = 3                              # MAX_RETRY_LOOPS
@@ -156,6 +157,7 @@ class MigrationConfig(BaseSettings):
             f"  Memory       : {'✅ On (extra embedding calls)' if self.use_memory else '⚡ Off (cheaper)'}\n"
             f"  Legacy Path  : {self.legacy_project_path}\n"
             f"  Output Path  : {self.output_project_path}\n"
+            f"  Checkpoint   : {self.checkpoint_dir}\n"
             f"  Max Retries  : {self.max_retry_loops}\n"
             f"  Verbose      : {self.verbose}\n"
             f"  API Key Set  : {'✅ Yes' if self.openai_api_key else '❌ No'}"
