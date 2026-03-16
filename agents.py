@@ -22,7 +22,7 @@ from migration_tools import (
 def create_llm(
     model: str = "gpt-4o",
     temperature: float = 0.1,
-    max_tokens: int = 16384,
+    max_tokens: int = 8192,
 ) -> LLM:
     """
     CrewAI 1.x uses its own LLM wrapper backed by LiteLLM.
@@ -39,7 +39,7 @@ def create_all_agents(
     model: str = "gpt-4o",
     legacy_path: str = "./legacy_sample",
     output_path: str = "./output/LegacyInventory",
-    max_tokens: int = 16384,
+    max_tokens: int = 8192,
 ) -> dict:
     """
     Factory — creates and returns all 4 agents as a dict.

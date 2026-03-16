@@ -164,7 +164,7 @@ class TestLLMWiring:
                 from agents import create_all_agents
                 create_all_agents(model="gpt-4o")
         mock_llm.assert_called_once_with(
-            model="gpt-4o", temperature=0.1, max_tokens=16384
+            model="gpt-4o", temperature=0.1, max_tokens=8192
         )
 
     def test_all_agents_share_same_llm_instance(self):

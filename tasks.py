@@ -46,11 +46,17 @@ Do NOT assume a folder structure — discover it by reading the actual files.
 Follow these steps exactly:
 1. Call list_files on "{legacy_path}" to discover every file.
    list_files returns FULL paths (e.g. "legacy_sample/LegacyInventory/Web.config").
-   NEVER construct or guess file paths — use ONLY paths returned by list_files.
+   NEVER construct or guess file paths — use ONLY the exact paths returned by list_files.
 
-2. From the list_files output, identify ALL file paths. Then call read_multiple_files
-   with the COMPLETE list of paths at once. Do not read files one at a time.
-   Use the EXACT paths from list_files — do not shorten, modify, or reconstruct them.
+2. From the list_files output, call read_multiple_files with the configuration files:
+   Web.config, *.csproj, packages.config, Global.asax, Global.asax.cs
+   (Use only paths that actually appear in the list_files output.)
+
+3. From the list_files output, call read_multiple_files with all .cs files
+   found in Models/, Data/, or any sub-folder. Use EXACT paths from list_files.
+
+4. From the list_files output, call read_multiple_files with all .aspx and .aspx.cs
+   page files. Use EXACT paths from list_files.
 
 Produce a Migration Analysis Report with these exact sections:
 

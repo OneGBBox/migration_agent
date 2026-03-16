@@ -18,6 +18,7 @@ Usage:
 """
 import argparse
 import sys
+import time
 from pathlib import Path
 # ← needed to catch pydantic-settings errors
 from pydantic import ValidationError
@@ -26,6 +27,7 @@ from crewai import Crew, Process
 from config.settings import load_config       # ← single source of truth
 from agents import create_all_agents
 from tasks import create_tasks
+from rate_limiter import setup_limiter
 # ──────────────────────────────────────────────
 # Core runner
 # ──────────────────────────────────────────────
@@ -51,6 +53,11 @@ def run_migration(legacy_path: str, output_path: str) -> str:
     print("═" * 60 + "\n")
 
     Path(config.output_project_path).mkdir(parents=True, exist_ok=True)
+
+    # ── Rate limiter ─────────────────────────────
+    # Patches litellm.completion so every agent call is throttled.
+    # Must be called once per run, before any LLM calls are made.
+    setup_limiter(rpm_limit=config.llm_rpm, tpm_limit=config.llm_tpm)
 
     # ── Agents ───────────────────────────────────
     print("⚙️  Creating agents...")
@@ -135,8 +142,10 @@ def run_with_retry(legacy_path: str, output_path: str) -> str:
 
         if attempt < config.max_retry_loops:
             print(
-                f"\n⚠️   Migration INCOMPLETE — retrying (attempt {attempt + 1})...")
-            print("     The Developer will use the fix list from this report.\n")
+                f"\n⚠️   Migration INCOMPLETE — waiting 60s before retry "
+                f"(attempt {attempt + 1}) to let OpenAI rate-limit window reset...")
+            time.sleep(60)
+            print("     Retrying now. The Developer will use the fix list from this report.\n")
         else:
             print(
                 f"\n❌  Still INCOMPLETE after {config.max_retry_loops} attempts.")
