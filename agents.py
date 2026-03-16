@@ -61,7 +61,9 @@ def create_all_agents(
         fast_model:  Cheaper/faster model for read-only agents (Manager, Critic).
                      gpt-4o-mini uses the same API key and is ~15x cheaper per token.
     """
-    llm = create_llm(model, max_tokens=max_tokens)
+    llm_main = create_llm(model, max_tokens=max_tokens)        # gpt-4o — code generation
+    llm_fast = create_llm(fast_model, max_tokens=max_tokens)  # gpt-4o-mini — read/summarise
+    llm = llm_main  # backward-compat alias used elsewhere in the file
 
     # ──────────────────────────────────────────────
     # Agent 1: Manager
@@ -87,7 +89,7 @@ def create_all_agents(
         ),
         llm=llm_fast,              # gpt-4o-mini — no code generation needed
         tools=[],                  # Manager has no tools — coordinates only
-        allow_delegation=False,
+        allow_delegation=True,
         verbose=True,
         max_iter=3,                # was 5 — reduced to cap token loops
     )

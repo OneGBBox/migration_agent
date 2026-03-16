@@ -51,8 +51,15 @@ from crewai import Crew, Process
 
 from config.settings import load_config
 from agents import create_all_agents
-from tasks import create_tasks
+from tasks import (
+    build_analyze_task,
+    build_migrate_task,
+    build_test_task,
+    build_review_task,
+    build_report_task,
+)
 from rate_limiter import setup_limiter
+from checkpoint import CheckpointManager
 # ──────────────────────────────────────────────
 # Core runner
 # ──────────────────────────────────────────────
@@ -155,27 +162,19 @@ def run_migration(legacy_path: str, output_path: str, checkpoint: CheckpointMana
         checkpoint=checkpoint,
     )
 
-    # ── Crew ─────────────────────────────────────
-    # IMPORTANT: Process.sequential does NOT use manager_agent.
-    # The Manager is the agent assigned to task_report (Task 5).
-    # It receives all prior task outputs via context=[...] in tasks.py.
-    #
-    # Process.hierarchical WOULD use manager_agent but requires an LLM
-    # with function calling and adds overhead we don't need for this scope.
-    print("🚀  Assembling crew (sequential process)...\n")
-
-    crew = Crew(
-        agents=[
-            agents["manager"],
-            agents["developer"],
-            agents["tester"],
-            agents["critic"],
-        ],
-        tasks=tasks,
-        process=Process.sequential,   # Tasks run one after another in order
-        verbose=config.verbose,       # bool from pydantic-settings
-        memory=config.use_memory,     # False by default — saves embedding API calls
-        max_rpm=config.llm_rpm,       # Rate limit here, NOT on LLM() — CrewAI RPMController
+    # ── Task 2: Migrate ───────────────────────────────────────────────────
+    result_migrate = _run_single_task(
+        task_name="migrate",
+        task=build_migrate_task(
+            agent=agents["developer"],
+            legacy_path=legacy_path,
+            output_path=output_path,
+            prior_analyze_summary=checkpoint.load_summary("analyze"),
+            output_file=f"{cp_dir}/migrate.md",
+        ),
+        agent=agents["developer"],
+        verbose=config.verbose,
+        checkpoint=checkpoint,
     )
 
     # ── Task 3: Test ──────────────────────────────────────────────────────

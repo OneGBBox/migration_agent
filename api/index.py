@@ -110,11 +110,33 @@ class _StdoutCapture:
 
 # ── Background migration worker ───────────────────────────────────────────────
 
+def _suppress_signal_in_thread() -> None:
+    """
+    CrewAI's telemetry tries to register SIGTERM/SIGINT handlers, but
+    signal.signal() only works on the main thread.  Monkey-patch it to
+    silently ignore ValueError when called from a worker thread so the
+    'Cannot register SIGTERM handler' warning doesn't appear.
+    """
+    import signal as _signal
+    _orig = _signal.signal
+
+    def _safe_signal(signalnum, handler):
+        try:
+            return _orig(signalnum, handler)
+        except ValueError:
+            pass  # not in main thread — ignore silently
+
+    _signal.signal = _safe_signal
+
+
 def _run_migration_sync(job_id: str, legacy_path: str, output_path: str) -> None:
     """
     Runs in a thread-pool worker.
     Captures stdout + logging and routes every line to the job's log queue.
     """
+    # Must be called before any CrewAI import to suppress signal.signal errors
+    _suppress_signal_in_thread()
+
     job = _jobs[job_id]
     log_q: queue.Queue = job["log_queue"]
     job["status"] = "running"
@@ -132,7 +154,15 @@ def _run_migration_sync(job_id: str, legacy_path: str, output_path: str) -> None
 
     try:
         from main import run_migration  # noqa: PLC0415
-        result = run_migration(legacy_path, output_path)
+        from checkpoint import CheckpointManager  # noqa: PLC0415
+        from config.settings import load_config as _load_config  # noqa: PLC0415
+        try:
+            _cfg = _load_config(legacy_path_override=legacy_path, output_path_override=output_path)
+            _cp_dir = _cfg.checkpoint_dir
+        except Exception:
+            _cp_dir = "./output/.checkpoints"
+        checkpoint = CheckpointManager(checkpoint_dir=_cp_dir)
+        result = run_migration(legacy_path, output_path, checkpoint)
         job["status"] = "complete"
         job["result"] = result
     except Exception as exc:  # noqa: BLE001
