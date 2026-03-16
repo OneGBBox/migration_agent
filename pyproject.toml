@@ -8,6 +8,7 @@ dependencies = [
     "crewai==1.9.3",
     "crewai-tools==1.9.3",
     "ipykernel>=7.2.0",
+    "litellm>=1.75.3",
     "openai>=1.83.0",
     "pydantic-settings>=2.10.1",
     "python-dotenv>=1.1.1",

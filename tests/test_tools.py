@@ -12,6 +12,7 @@ import pytest
 from migration_tools import (
     ReadFileTool,
     WriteFileTool,
+    WriteBatchFilesTool,
     ListFilesTool,
     RunCommandTool,
     ReadMultipleFilesTool,
@@ -189,11 +190,11 @@ class TestReadMultipleFilesTool:
 # ──────────────────────────────────────────────
 
 class TestToolGetters:
-    def test_developer_tools_has_five_tools(self):
-        assert len(get_developer_tools()) == 5
+    def test_developer_tools_has_six_tools(self):
+        assert len(get_developer_tools()) == 6
 
-    def test_tester_tools_has_five_tools(self):
-        assert len(get_tester_tools()) == 5
+    def test_tester_tools_has_six_tools(self):
+        assert len(get_tester_tools()) == 6
 
     def test_critic_tools_has_three_tools(self):
         assert len(get_critic_tools()) == 3
@@ -210,6 +211,10 @@ class TestToolGetters:
         names = [t.name for t in get_developer_tools()]
         assert "write_file" in names
 
+    def test_developer_tools_include_write_batch_files(self):
+        names = [t.name for t in get_developer_tools()]
+        assert "write_batch_files" in names
+
     def test_developer_tools_include_run_command(self):
         names = [t.name for t in get_developer_tools()]
         assert "run_command" in names
@@ -218,3 +223,36 @@ class TestToolGetters:
         names = [t.name for t in get_critic_tools()]
         for name in names:
             assert "read" in name or "list" in name
+
+
+# ──────────────────────────────────────────────
+# WriteBatchFilesTool
+# ──────────────────────────────────────────────
+
+class TestWriteBatchFilesTool:
+    def test_writes_multiple_files(self, tmp_path):
+        files = [
+            {"path": str(tmp_path / "a.cs"), "content": "class A {}"},
+            {"path": str(tmp_path / "b.json"), "content": '{"key": "value"}'},
+        ]
+        result = WriteBatchFilesTool()._run(files)
+        assert "SUCCESS" in result
+        assert (tmp_path / "a.cs").read_text() == "class A {}"
+        assert (tmp_path / "b.json").read_text() == '{"key": "value"}'
+
+    def test_creates_parent_directories(self, tmp_path):
+        files = [{"path": str(tmp_path / "Controllers" / "HomeController.cs"), "content": "class C {}"}]
+        WriteBatchFilesTool()._run(files)
+        assert (tmp_path / "Controllers" / "HomeController.cs").exists()
+
+    def test_summary_line_shows_count(self, tmp_path):
+        files = [
+            {"path": str(tmp_path / "f1.cs"), "content": "x"},
+            {"path": str(tmp_path / "f2.cs"), "content": "y"},
+        ]
+        result = WriteBatchFilesTool()._run(files)
+        assert "2/2 files written successfully" in result
+
+    def test_empty_list_returns_summary(self):
+        result = WriteBatchFilesTool()._run([])
+        assert "0/0 files written successfully" in result

@@ -11,3 +11,9 @@ wheels/
 .env
 venv/
 .env.example
+
+# Generated migration output — never commit produced .NET projects
+output/
+
+# Claude session data
+.claude/

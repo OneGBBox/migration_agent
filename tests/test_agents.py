@@ -88,10 +88,10 @@ class TestManagerAgent:
 # ──────────────────────────────────────────────
 
 class TestDeveloperAgent:
-    def test_developer_has_five_tools(self):
+    def test_developer_has_six_tools(self):
         _, log = _make_agents()
         kw = _find_agent_kw(log, "developer")
-        assert len(kw["tools"]) == 5
+        assert len(kw["tools"]) == 6
 
     def test_developer_allow_delegation_is_false(self):
         _, log = _make_agents()
@@ -119,10 +119,10 @@ class TestDeveloperAgent:
 # ──────────────────────────────────────────────
 
 class TestTesterAgent:
-    def test_tester_has_five_tools(self):
+    def test_tester_has_six_tools(self):
         _, log = _make_agents()
         kw = _find_agent_kw(log, "tester")
-        assert len(kw["tools"]) == 5
+        assert len(kw["tools"]) == 6
 
     def test_tester_allow_delegation_is_false(self):
         _, log = _make_agents()
@@ -164,7 +164,7 @@ class TestLLMWiring:
                 from agents import create_all_agents
                 create_all_agents(model="gpt-4o")
         mock_llm.assert_called_once_with(
-            model="gpt-4o", temperature=0.1
+            model="gpt-4o", temperature=0.1, max_tokens=8192
         )
 
     def test_all_agents_share_same_llm_instance(self):

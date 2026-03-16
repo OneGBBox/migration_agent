@@ -29,19 +29,28 @@ from migration_tools import (
 )
 
 
-def create_llm(model: str, temperature: float = 0.1) -> LLM:
+def create_llm(
+    model: str = "gpt-4o",
+    temperature: float = 0.1,
+    max_tokens: int = 8192,
+) -> LLM:
     """
     CrewAI 1.x uses its own LLM wrapper backed by LiteLLM.
     Low temperature = more deterministic code output.
+    max_tokens: raise from GPT-4o's default 4096 to 16384 so write_batch_files
+                (19 files ≈ 5000+ tokens of JSON) is never truncated mid-response.
+    NOTE: rpm/rate-limiting belongs on Crew(max_rpm=...), NOT on LLM().
+          Passing rpm to LLM causes 'Completions.create() unexpected keyword argument rpm'.
     """
-    return LLM(model=model, temperature=temperature)
+    return LLM(model=model, temperature=temperature, max_tokens=max_tokens)
 
 
 def create_all_agents(
     model: str = "gpt-4o",
     fast_model: str = "gpt-4o-mini",
     legacy_path: str = "./legacy_sample",
-    output_path: str = "./output/MigratedApp",
+    output_path: str = "./output/LegacyInventory",
+    max_tokens: int = 8192,
 ) -> dict:
     """
     Factory — creates and returns all 4 agents as a dict.
@@ -52,8 +61,7 @@ def create_all_agents(
         fast_model:  Cheaper/faster model for read-only agents (Manager, Critic).
                      gpt-4o-mini uses the same API key and is ~15x cheaper per token.
     """
-    llm_main = create_llm(model)
-    llm_fast = create_llm(fast_model)
+    llm = create_llm(model, max_tokens=max_tokens)
 
     # ──────────────────────────────────────────────
     # Agent 1: Manager
@@ -115,7 +123,7 @@ def create_all_agents(
         tools=get_developer_tools(),
         allow_delegation=False,
         verbose=True,
-        max_iter=5,                # was 10 — reduced to cap runaway loops
+        max_iter=20,
     )
 
     # ──────────────────────────────────────────────
@@ -144,7 +152,7 @@ def create_all_agents(
         tools=get_tester_tools(),
         allow_delegation=False,
         verbose=True,
-        max_iter=4,                # was 8 — reduced to cap token loops
+        max_iter=12,
     )
 
     # ──────────────────────────────────────────────
@@ -174,7 +182,7 @@ def create_all_agents(
         tools=get_critic_tools(),
         allow_delegation=False,
         verbose=True,
-        max_iter=3,                # was 6 — reduced to cap token loops
+        max_iter=10,
     )
 
     return {

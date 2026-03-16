@@ -43,6 +43,7 @@ Usage:
 """
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -50,14 +51,11 @@ from crewai import Crew, Process
 
 from config.settings import load_config
 from agents import create_all_agents
-from checkpoint import CheckpointManager
-from tasks import (
-    build_analyze_task,
-    build_migrate_task,
-    build_test_task,
-    build_review_task,
-    build_report_task,
-)
+from tasks import create_tasks
+from rate_limiter import setup_limiter
+# ──────────────────────────────────────────────
+# Core runner
+# ──────────────────────────────────────────────
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -130,13 +128,18 @@ def run_migration(legacy_path: str, output_path: str, checkpoint: CheckpointMana
 
     Path(output_path).mkdir(parents=True, exist_ok=True)
 
-    # ── Build agents once — reused across all mini-crews ─────────────────
+    # ── Rate limiter ─────────────────────────────
+    # Patches litellm.completion so every agent call is throttled.
+    # Must be called once per run, before any LLM calls are made.
+    setup_limiter(rpm_limit=config.llm_rpm, tpm_limit=config.llm_tpm)
+
+    # ── Agents ───────────────────────────────────
     print("⚙️  Creating agents...")
     agents = create_all_agents(
         model=config.llm_model,
-        fast_model=config.fast_llm_model,
-        legacy_path=legacy_path,
-        output_path=output_path,
+        legacy_path=config.legacy_project_path,
+        output_path=config.output_project_path,
+        max_tokens=config.llm_max_tokens,
     )
 
     # ── Task 1: Analyze ───────────────────────────────────────────────────
@@ -152,19 +155,27 @@ def run_migration(legacy_path: str, output_path: str, checkpoint: CheckpointMana
         checkpoint=checkpoint,
     )
 
-    # ── Task 2: Migrate ───────────────────────────────────────────────────
-    result_migrate = _run_single_task(
-        task_name="migrate",
-        task=build_migrate_task(
-            agent=agents["developer"],
-            legacy_path=legacy_path,
-            output_path=output_path,
-            prior_analyze_summary=checkpoint.load_summary("analyze"),
-            output_file=f"{cp_dir}/migrate.md",
-        ),
-        agent=agents["developer"],
-        verbose=config.verbose,
-        checkpoint=checkpoint,
+    # ── Crew ─────────────────────────────────────
+    # IMPORTANT: Process.sequential does NOT use manager_agent.
+    # The Manager is the agent assigned to task_report (Task 5).
+    # It receives all prior task outputs via context=[...] in tasks.py.
+    #
+    # Process.hierarchical WOULD use manager_agent but requires an LLM
+    # with function calling and adds overhead we don't need for this scope.
+    print("🚀  Assembling crew (sequential process)...\n")
+
+    crew = Crew(
+        agents=[
+            agents["manager"],
+            agents["developer"],
+            agents["tester"],
+            agents["critic"],
+        ],
+        tasks=tasks,
+        process=Process.sequential,   # Tasks run one after another in order
+        verbose=config.verbose,       # bool from pydantic-settings
+        memory=config.use_memory,     # False by default — saves embedding API calls
+        max_rpm=config.llm_rpm,       # Rate limit here, NOT on LLM() — CrewAI RPMController
     )
 
     # ── Task 3: Test ──────────────────────────────────────────────────────
@@ -248,19 +259,11 @@ def run_with_retry(legacy_path: str, output_path: str, checkpoint: CheckpointMan
             return result
 
         if attempt < config.max_retry_loops:
-            print(f"\n⚠️   Migration INCOMPLETE — retrying (attempt {attempt + 1})...")
-            print("     Clearing checkpoints so the Developer can apply fixes...\n")
-            # Clear checkpoints so ALL tasks re-run with the fix list in context.
-            # Only clear tasks that logically need to re-run (migrate onwards);
-            # keep the analyze checkpoint since the legacy project hasn't changed.
-            for task_name in ["migrate", "test", "review", "report"]:
-                cp_file = Path(config.checkpoint_dir) / f"{task_name}.md"
-                if cp_file.exists():
-                    cp_file.unlink()
-                meta_file = Path(config.checkpoint_dir) / f"{task_name}.meta.json"
-                if meta_file.exists():
-                    meta_file.unlink()
-            print("     Checkpoints cleared for: migrate, test, review, report.\n")
+            print(
+                f"\n⚠️   Migration INCOMPLETE — waiting 60s before retry "
+                f"(attempt {attempt + 1}) to let OpenAI rate-limit window reset...")
+            time.sleep(60)
+            print("     Retrying now. The Developer will use the fix list from this report.\n")
         else:
             print(f"\n❌  Still INCOMPLETE after {config.max_retry_loops} attempts.")
             print("    Review MIGRATION_REPORT.md for remaining issues.")

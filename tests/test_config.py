@@ -34,9 +34,14 @@ class TestMigrationConfigDefaults:
         config = MigrationConfig(openai_api_key="sk-test")
         assert config.legacy_project_path == "./legacy_sample"
 
-    def test_default_output_path(self):
+    def test_default_output_path_auto_derives_from_legacy(self):
+        # Default legacy_sample contains LegacyInventory.sln → output is auto-derived
         config = MigrationConfig(openai_api_key="sk-test")
-        assert config.output_project_path == "./output/MigratedApp"
+        assert config.output_project_path == "./output/LegacyInventory"
+
+    def test_explicit_output_path_is_respected(self):
+        config = MigrationConfig(openai_api_key="sk-test", output_project_path="./output/Custom")
+        assert config.output_project_path == "./output/Custom"
 
     def test_missing_api_key_raises_validation_error(self, tmp_path, monkeypatch):
         # Change to a dir with no .env so pydantic-settings cannot find a key

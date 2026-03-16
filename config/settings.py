@@ -34,8 +34,24 @@ Usage in main.py — identical to before, nothing changes there:
 """
 
 from pathlib import Path
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _derive_project_name(legacy_path: str) -> str:
+    """
+    Infer the project name from the legacy path.
+    Priority: .sln filename → first subdirectory → last path segment.
+    """
+    base = Path(legacy_path)
+    if base.exists():
+        sln_files = sorted(base.glob("*.sln"))
+        if sln_files:
+            return sln_files[0].stem
+        subdirs = sorted(d for d in base.iterdir() if d.is_dir())
+        if subdirs:
+            return subdirs[0].name
+    return base.name or "MigratedApp"
 
 
 class MigrationConfig(BaseSettings):
@@ -56,9 +72,12 @@ class MigrationConfig(BaseSettings):
     llm_model: str = "gpt-4o"              # LLM_MODEL  (Developer + Tester)
     fast_llm_model: str = "gpt-4o-mini"   # FAST_LLM_MODEL  (Manager + Critic — lighter tasks)
     legacy_project_path: str = "./legacy_sample"              # LEGACY_PROJECT_PATH
-    output_project_path: str = "./output/MigratedApp"         # OUTPUT_PROJECT_PATH
-    checkpoint_dir: str = "./output/.checkpoints"             # CHECKPOINT_DIR
+    output_project_path: str = ""                             # OUTPUT_PROJECT_PATH (empty = auto-derive)
     max_retry_loops: int = 3                              # MAX_RETRY_LOOPS
+    llm_rpm: int = 10                                     # LLM_RPM — max requests/min
+    llm_tpm: int = 30000                                  # LLM_TPM — max tokens/min (OpenAI Tier 1 gpt-4o = 30,000; Tier 2 = 450,000)
+    llm_max_tokens: int = 8192                            # LLM_MAX_TOKENS — max tokens per response
+    use_memory: bool = False                              # USE_MEMORY — enables CrewAI shared memory (costs extra embedding tokens)
     verbose: bool = True                           # VERBOSE
 
     # ── Pydantic-settings configuration ────────────────────────────────
@@ -79,6 +98,20 @@ class MigrationConfig(BaseSettings):
         if v < 1:
             raise ValueError(f"MAX_RETRY_LOOPS must be >= 1, got: {v}")
         return v
+
+    @model_validator(mode="after")
+    def derive_output_path(self) -> "MigrationConfig":
+        """Auto-derive output path from the legacy project name when not explicitly set.
+
+        "MigratedApp" is the old hardcoded fallback — always override it with the
+        real project name so stale env vars or old .env entries don't silently win.
+        """
+        from pathlib import Path as _Path
+        current_name = _Path(self.output_project_path).name if self.output_project_path else ""
+        if not self.output_project_path or current_name == "MigratedApp":
+            project_name = _derive_project_name(self.legacy_project_path)
+            self.output_project_path = f"./output/{project_name}"
+        return self
 
     # ── Business-level validation (checks across multiple fields) ───────
 
@@ -117,8 +150,11 @@ class MigrationConfig(BaseSettings):
         Never prints the API key — only confirms it is set or not.
         """
         return (
-            f"  LLM Model    : {self.llm_model}  (Developer / Tester)\n"
-            f"  Fast Model   : {self.fast_llm_model}  (Manager / Critic)\n"
+            f"  LLM Model    : {self.llm_model}\n"
+            f"  LLM RPM      : {self.llm_rpm} req/min\n"
+            f"  LLM TPM      : {self.llm_tpm:,} tokens/min\n"
+            f"  LLM MaxTokens: {self.llm_max_tokens}\n"
+            f"  Memory       : {'✅ On (extra embedding calls)' if self.use_memory else '⚡ Off (cheaper)'}\n"
             f"  Legacy Path  : {self.legacy_project_path}\n"
             f"  Output Path  : {self.output_project_path}\n"
             f"  Checkpoint   : {self.checkpoint_dir}\n"

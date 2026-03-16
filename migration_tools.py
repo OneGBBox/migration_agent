@@ -11,7 +11,7 @@ KEY CHANGE from 0.28.8 → 1.9.3:
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional, Type
+from typing import ClassVar, Optional, Type
 
 from crewai.tools import BaseTool          # ← crewai.tools, not langchain.tools
 from pydantic import BaseModel, Field
@@ -47,6 +47,21 @@ class RunCommandInput(BaseModel):
 class ReadMultipleFilesInput(BaseModel):
     file_paths: list[str] = Field(
         description="List of file paths to read at once")
+
+
+class FileEntry(BaseModel):
+    path: str = Field(description="File path to write")
+    content: str = Field(description="Full content of the file")
+
+
+class WriteBatchFilesInput(BaseModel):
+    files: list[FileEntry] = Field(
+        description=(
+            "List of files to write, each with 'path' and 'content' fields. "
+            "Example: [{'path': './output/App/Program.cs', 'content': '...'}, "
+            "{'path': './output/App/appsettings.json', 'content': '...'}]"
+        )
+    )
 
 
 # ──────────────────────────────────────────────
@@ -115,7 +130,7 @@ class ListFilesTool(BaseTool):
             files = list(base.rglob("*"))
             if extension:
                 files = [f for f in files if f.suffix == extension]
-            result = [str(f.relative_to(base)) for f in files if f.is_file()]
+            result = [f.as_posix() for f in files if f.is_file()]
             return "\n".join(result) if result else "No files found."
         except Exception as e:
             return f"ERROR listing files: {str(e)}"
@@ -135,7 +150,7 @@ class RunCommandTool(BaseTool):
     )
     args_schema: Type[BaseModel] = RunCommandInput
 
-    ALLOWED_PREFIXES: list[str] = ["dotnet", "cat", "ls", "find", "echo"]
+    ALLOWED_PREFIXES: ClassVar[list[str]] = ["dotnet", "cat", "ls", "find", "echo"]
 
     def _run(self, command: str, working_dir: str = ".") -> str:
         first_token = command.strip().split()[0]
@@ -192,15 +207,77 @@ class ReadMultipleFilesTool(BaseTool):
 
 
 # ──────────────────────────────────────────────
+# Tool 6: Write Multiple Files in One Call
+# ──────────────────────────────────────────────
+
+class WriteBatchFilesTool(BaseTool):
+    name: str = "write_batch_files"
+    description: str = (
+        "Writes ALL files for the migrated project in a single call. "
+        "Pass a dict of {file_path: content} for every file. "
+        "Creates parent directories automatically. "
+        "PREFER this over calling write_file repeatedly — one call instead of many."
+    )
+    args_schema: Type[BaseModel] = WriteBatchFilesInput
+
+    def _run(self, *args, **kwargs) -> str:
+        import json
+
+        # CrewAI 1.9.3 may call _run() in multiple ways:
+        #   _run([{...}])           — positional list (direct / test calls)
+        #   _run(files=[{...}])     — keyword after schema validation
+        #   _run('{"files":[...]}') — raw JSON string from the LLM output
+        #   _run({'files':[...]})   — raw dict
+        if args:
+            raw = args[0]
+            if isinstance(raw, str):
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    return f"ERROR: Invalid JSON input: {raw[:200]}"
+                files = data.get("files", data) if isinstance(data, dict) else data
+            elif isinstance(raw, list):
+                files = raw
+            elif isinstance(raw, dict):
+                files = raw.get("files", [])
+            else:
+                files = []
+        else:
+            files = kwargs.get("files", [])
+
+        results = []
+        for entry in files:
+            # Handle both FileEntry instances (from CrewAI validation)
+            # and plain dicts (from direct test calls or raw agent output)
+            if isinstance(entry, dict):
+                file_path = entry.get("path", "")
+                content = entry.get("content", "")
+            else:
+                file_path = entry.path
+                content = entry.content
+            try:
+                path = Path(file_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                results.append(f"SUCCESS: Written → {file_path}")
+            except Exception as e:
+                results.append(f"ERROR writing {file_path}: {str(e)}")
+        written = sum(1 for r in results if r.startswith("SUCCESS"))
+        results.append(f"\nTotal: {written}/{len(files)} files written successfully.")
+        return "\n".join(results)
+
+
+# ──────────────────────────────────────────────
 # Convenience getters — called from agents.py
 # ──────────────────────────────────────────────
 
 def get_developer_tools() -> list:
-    """Developer needs read + write + dotnet CLI to scaffold and write files."""
+    """Developer needs read + write + batch write + dotnet CLI to scaffold and write files."""
     return [
         ReadFileTool(),
         ReadMultipleFilesTool(),
         WriteFileTool(),
+        WriteBatchFilesTool(),
         ListFilesTool(),
         RunCommandTool(),
     ]
@@ -212,6 +289,7 @@ def get_tester_tools() -> list:
         ReadFileTool(),
         ReadMultipleFilesTool(),
         WriteFileTool(),
+        WriteBatchFilesTool(),
         ListFilesTool(),
         RunCommandTool(),
     ]
