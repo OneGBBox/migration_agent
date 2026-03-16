@@ -146,14 +146,32 @@ The report must:
 - Identify the database access pattern (EF6, ADO.NET, or both)
 - List every breaking change with file context
         """,
-        agent=developer,
+        expected_output=(
+            "A complete Migration Analysis Report with all 6 sections filled in: "
+            "PROJECT SUMMARY, DATABASE, CONTROLLERS, VIEWS, MIGRATION MAPPING, BREAKING CHANGES. "
+            "Every section must reference actual files and code found in the legacy project."
+        ),
+        agent=agent,
+        output_file=output_file,
     )
 
-    # ──────────────────────────────────────────────
-    # Task 2 — Generate .NET Core 8 Project
-    # Agent: Developer (code generation pass)
-    # ──────────────────────────────────────────────
-    task_migrate = Task(
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 2 — Generate .NET Core 8 Project
+# Agent: Developer (code generation pass)
+# Prior context needed: summary of Task 1 (what models/controllers exist)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def build_migrate_task(
+    agent,
+    legacy_path: str,
+    output_path: str,
+    prior_analyze_summary: str,
+    output_file: str,
+) -> Task:
+    project_name = output_path.rstrip("/\\").replace("\\", "/").split("/")[-1]
+
+    return Task(
         description=f"""
 Using the Migration Analysis Report from Task 1, generate a complete .NET Core 8 MVC
 application that is functionally equivalent to the legacy Web Forms project.
@@ -377,15 +395,30 @@ NuGet restore result: SUCCESS or FAIL (with full error if failed).
 Build result: SUCCESS or FAIL (with compiler error, file, and line number if failed).
 Solution file created at: {solution_path}
         """,
-        agent=developer,
-        context=[task_analyze],
+        expected_output=(
+            "Confirmation that every file was written successfully. "
+            "List each file path on its own line with a one-line description of its content."
+        ),
+        agent=agent,
+        output_file=output_file,
     )
 
-    # ──────────────────────────────────────────────
-    # Task 3 — Write and Run xUnit Tests
-    # Agent: Tester
-    # ──────────────────────────────────────────────
-    task_test = Task(
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 3 — Write and Run xUnit Tests
+# Agent: Tester
+# Prior context needed: summary of Task 2 (which files were written)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def build_test_task(
+    agent,
+    output_path: str,
+    prior_migrate_summary: str,
+    output_file: str,
+) -> Task:
+    project_name = output_path.rstrip("/\\").replace("\\", "/").split("/")[-1]
+
+    return Task(
         description=f"""
 Write xUnit tests for the migrated .NET Core 8 project at: {output_path}
 Then run them and report results.
@@ -483,15 +516,26 @@ Test report with:
 - Summary: "X / Y tests passed"
 - Final recommendation: READY FOR REVIEW or NEEDS FIXES
         """,
-        agent=tester,
-        context=[task_migrate],
+        expected_output=(
+            "Test report listing each test name with PASS or FAIL. "
+            "For FAIL: exact exception message and line that failed. "
+            "Summary line: 'X/7 tests passed'. "
+            "Final line: READY FOR REVIEW or NEEDS FIXES "
+            "(if NEEDS FIXES: bullet list of what the Developer must change)."
+        ),
+        agent=agent,
+        output_file=output_file,
     )
 
-    # ──────────────────────────────────────────────
-    # Task 4 — Code Review
-    # Agent: Critic
-    # ──────────────────────────────────────────────
-    task_review = Task(
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 4 — Code Review
+# Agent: Critic
+# Prior context needed: none — Critic reads the output files directly via tools
+# ──────────────────────────────────────────────────────────────────────────────
+
+def build_review_task(agent, output_path: str, output_file: str) -> Task:
+    return Task(
         description=f"""
 Review the entire migrated .NET Core 8 project at: {output_path}
 
@@ -549,8 +593,17 @@ Structured code review:
 - VERDICT: APPROVED (score >= 80) or NEEDS REVISION (score < 80)
 - If NEEDS REVISION: ordered fix list (most critical first)
         """,
-        agent=critic,
-        context=[task_migrate],
+        expected_output=(
+            "Structured code review: "
+            "SCORE: X/100. "
+            "HIGH SEVERITY ISSUES (file + description). "
+            "MEDIUM SEVERITY ISSUES (file + description). "
+            "LOW SEVERITY ISSUES (file + description). "
+            "VERDICT: APPROVED (score >= 80) or NEEDS REVISION (score < 80). "
+            "If NEEDS REVISION: ordered fix list for the Developer."
+        ),
+        agent=agent,
+        output_file=output_file,
     )
 
     # ──────────────────────────────────────────────
@@ -600,11 +653,3 @@ Final Migration Report:
         agent=manager,
         context=[task_analyze, task_migrate, task_test, task_review],
     )
-
-    return [
-        task_analyze,
-        task_migrate,
-        task_test,
-        task_review,
-        task_report,
-    ]
