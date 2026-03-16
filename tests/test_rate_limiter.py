@@ -91,8 +91,8 @@ class TestWindowExpiry:
             limiter.wait_if_needed(prompt_tokens=100, max_tokens=100)
             limiter.wait_if_needed(prompt_tokens=100, max_tokens=100)
 
-        # After 61 seconds, status should show 0 calls
-        with patch("rate_limiter.time.monotonic", return_value=base_time + 61):
+        # After 63 seconds, status should show 0 calls (WINDOW=62, strict < cutoff)
+        with patch("rate_limiter.time.monotonic", return_value=base_time + 63):
             s = limiter.status()
 
         assert s["calls_in_window"] == 0
@@ -110,8 +110,8 @@ class TestWindowExpiry:
         with patch("rate_limiter.time.monotonic", return_value=base_time + 50):
             limiter.wait_if_needed(prompt_tokens=200, max_tokens=200)
 
-        # Check at t=1062: first call expired, second still live
-        with patch("rate_limiter.time.monotonic", return_value=base_time + 62):
+        # Check at t=1063: first call expired (1000 < 1001 cutoff), second still live
+        with patch("rate_limiter.time.monotonic", return_value=base_time + 63):
             s = limiter.status()
 
         assert s["calls_in_window"] == 1
@@ -135,8 +135,8 @@ class TestRPMThrottle:
 
         # Third call:
         #   Iteration 1: now=base → 2/2 RPM → sleep
-        #   Iteration 2: now=base+61 → old calls purge (cutoff=base+1>base) → succeed
-        with patch("rate_limiter.time.monotonic", side_effect=[base, base + 61]):
+        #   Iteration 2: now=base+63 → old calls purge (cutoff=base+1>base) → succeed
+        with patch("rate_limiter.time.monotonic", side_effect=[base, base + 63]):
             with patch("rate_limiter.time.sleep") as mock_sleep:
                 limiter.wait_if_needed(10, 10)
 
@@ -161,8 +161,8 @@ class TestTPMThrottle:
 
         # Next call wants 300 tokens → 400+300=700 > 500 → must sleep
         #   Iteration 1: now=base → tpm exceeded → sleep
-        #   Iteration 2: now=base+61 → entry purged (cutoff=base+1>base) → succeed
-        with patch("rate_limiter.time.monotonic", side_effect=[base, base + 61]):
+        #   Iteration 2: now=base+63 → entry purged (cutoff=base+1>base) → succeed
+        with patch("rate_limiter.time.monotonic", side_effect=[base, base + 63]):
             with patch("rate_limiter.time.sleep") as mock_sleep:
                 limiter.wait_if_needed(prompt_tokens=100, max_tokens=200)
 

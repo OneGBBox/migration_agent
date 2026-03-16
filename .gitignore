@@ -17,3 +17,28 @@ output/
 
 # Claude session data
 .claude/
+
+# Vercel deployment cache
+.vercel/
+
+# Pytest cache and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
+*.suo
+*.user
+
+# uv
+.uv/

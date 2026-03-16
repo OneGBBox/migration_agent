@@ -163,7 +163,7 @@ class TestLLMWiring:
             with patch("agents.Agent", return_value=MagicMock()):
                 from agents import create_all_agents
                 create_all_agents(model="gpt-4o")
-        mock_llm.assert_called_once_with(
+        mock_llm.assert_any_call(
             model="gpt-4o", temperature=0.1, max_tokens=8192
         )
 

@@ -1,18 +1,18 @@
 """
-tasks/tasks.py
+tasks.py
 
-5 CrewAI Tasks wired in execution order.
+Five CrewAI Tasks — one per pipeline stage.
 
-The agent is GENERIC — it discovers the legacy project structure at runtime
-and generates the equivalent .NET Core 8 project.
-No entity names, controller names, or file names are hardcoded here.
+Two usage modes:
+  1. Mini-crew (main.py new architecture): call build_*_task() functions directly.
+     Each runs in its own Crew with a fresh context window.
+     Prior task summaries are injected into the description string.
 
-Task order:
-  1. task_analyze   → Developer discovers legacy Web Forms project structure
-  2. task_migrate   → Developer generates the equivalent .NET Core 8 MVC project
-  3. task_test      → Tester writes + runs xUnit tests for all generated controllers
-  4. task_review    → Critic scores the migrated code
-  5. task_report    → Manager produces final COMPLETE / INCOMPLETE verdict
+  2. Sequential crew (backward-compat / tests): call create_tasks().
+     Returns all 5 Task objects; context chaining done at construction.
+
+No entity names, controller names, or file names are hardcoded.
+The agent discovers everything from the actual legacy project at runtime.
 """
 
 from pathlib import Path
@@ -20,31 +20,41 @@ from pathlib import Path
 from crewai import Task
 
 
-def create_tasks(agents: dict, legacy_path: str, output_path: str) -> list[Task]:
-    """
-    Builds and returns all 5 tasks in execution order.
-    Each task receives prior task outputs via context=[...].
-    """
+# ── Internal helper ───────────────────────────────────────────────────────────
 
-    manager = agents["manager"]
-    developer = agents["developer"]
-    tester = agents["tester"]
-    critic = agents["critic"]
+def _solution_paths(output_path: str) -> tuple[str, str, str]:
+    """
+    Derive (project_name, solution_dir, solution_path) from the output path.
 
-    project_name = Path(output_path).name
-    # Use as_posix() to get forward slashes; re-add "./" if the parent is relative
-    # (str(Path("./output/X").parent) strips "./" → "output", not "./output")
-    _parent = Path(output_path).parent
+    str(Path("./output/X").parent) strips "./" → "output", so we use
+    as_posix() and re-add "./" when the parent is a relative path.
+    """
+    _p = Path(output_path)
+    project_name = _p.name
+    _parent = _p.parent
     solution_dir = _parent.as_posix()
     if not solution_dir.startswith("/") and not solution_dir.startswith("./"):
         solution_dir = "./" + solution_dir
     solution_path = f"{solution_dir}/{project_name}.sln"
+    return project_name, solution_dir, solution_path
 
-    # ──────────────────────────────────────────────
-    # Task 1 — Analyze Legacy Web Forms Project
-    # Agent: Developer (read-only discovery pass)
-    # ──────────────────────────────────────────────
-    task_analyze = Task(
+
+# ── Task 1 — Analyze ─────────────────────────────────────────────────────────
+
+def build_analyze_task(
+    agent,
+    legacy_path: str,
+    output_file: str | None = None,
+    context: list | None = None,
+) -> Task:
+    """Discover the legacy Web Forms project structure dynamically."""
+    kwargs = {}
+    if output_file:
+        kwargs["output_file"] = output_file
+    if context:
+        kwargs["context"] = context
+
+    return Task(
         description=f"""
 Analyze the legacy ASP.NET Web Forms project located at: {legacy_path}
 
@@ -136,46 +146,46 @@ For each legacy pattern found, state the exact .NET Core 8 equivalent:
 List every pattern in the legacy code that does NOT exist in .NET Core 8.
 For each: file name, handler/method name, and what must change.
         """,
-        expected_output="""
-A complete Migration Analysis Report with all 6 sections.
-
-The report must:
-- Name EVERY entity class found (or inferred), with all their properties
-- Name EVERY .aspx page file found, with every event handler mapped to a controller action
-- Include the proposed controller name for each page
-- Identify the database access pattern (EF6, ADO.NET, or both)
-- List every breaking change with file context
-        """,
         expected_output=(
             "A complete Migration Analysis Report with all 6 sections filled in: "
-            "PROJECT SUMMARY, DATABASE, CONTROLLERS, VIEWS, MIGRATION MAPPING, BREAKING CHANGES. "
+            "PROJECT SUMMARY, DATABASE, ENTITIES, WEB FORMS PAGES, "
+            "MIGRATION MAPPING, BREAKING CHANGES. "
             "Every section must reference actual files and code found in the legacy project."
         ),
         agent=agent,
-        output_file=output_file,
+        **kwargs,
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Task 2 — Generate .NET Core 8 Project
-# Agent: Developer (code generation pass)
-# Prior context needed: summary of Task 1 (what models/controllers exist)
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Task 2 — Migrate ─────────────────────────────────────────────────────────
 
 def build_migrate_task(
     agent,
     legacy_path: str,
     output_path: str,
-    prior_analyze_summary: str,
-    output_file: str,
+    prior_analyze_summary: str = "",
+    output_file: str | None = None,
+    context: list | None = None,
 ) -> Task:
-    project_name = output_path.rstrip("/\\").replace("\\", "/").split("/")[-1]
+    """Generate the complete .NET Core 8 MVC project."""
+    project_name, solution_dir, solution_path = _solution_paths(output_path)
+    kwargs = {}
+    if output_file:
+        kwargs["output_file"] = output_file
+    if context:
+        kwargs["context"] = context
+
+    prior_context = (
+        f"\n═══ SUMMARY FROM TASK 1 (ANALYZE) ═══\n{prior_analyze_summary}\n"
+        if prior_analyze_summary
+        else ""
+    )
 
     return Task(
         description=f"""
 Using the Migration Analysis Report from Task 1, generate a complete .NET Core 8 MVC
 application that is functionally equivalent to the legacy Web Forms project.
-
+{prior_context}
 Output directory: {output_path}
 Project name: {project_name}
 Solution file: {solution_path}
@@ -248,9 +258,8 @@ Generate:
       // ... repeat for every entity
       protected override void OnModelCreating(ModelBuilder modelBuilder)
       {{
-          // For any decimal property that represents money/price: configure precision
+          // For decimal money/price properties: configure precision
           // e.g.: modelBuilder.Entity<Product>().Property(p => p.Price).HasColumnType("decimal(18,2)");
-          // Apply this for every decimal money field found across all entities
       }}
   }}
 
@@ -258,15 +267,15 @@ Generate:
 Required using statements:
   using System.ComponentModel.DataAnnotations;
   using System.ComponentModel.DataAnnotations.Schema;  // only if needed for [ForeignKey] etc.
-For EACH entity discovered in Task 1, generate a model class:
-  - public int Id {{ get; set; }}  (primary key — use the name from legacy)
-  - Every property from the legacy model, using the same C# type
+For EACH entity discovered in Task 1:
+  - public int Id {{ get; set; }}  (primary key)
+  - Every property with same C# type as legacy
   - [Required] on every non-nullable string property
   - [StringLength(n)] if a max length was found or can be inferred
-  - [Range(min, max)] on numeric properties where a range makes sense (e.g., price >= 0)
+  - [Range(min, max)] on numeric properties where a range makes sense
   - Foreign key integer property (e.g., public int CategoryId {{ get; set; }})
   - Navigation property (e.g., public Category? Category {{ get; set; }})
-  - Navigation collection on the parent side (e.g., public ICollection<Child> Children {{ get; set; }} = new List<Child>();)
+  - Navigation collection on parent side (e.g., public ICollection<Child> Children {{ get; set; }} = new List<Child>();)
 
 ── {output_path}/Controllers/{{EntityName}}sController.cs  [one per entity] ──
 Required using statements:
@@ -274,69 +283,35 @@ Required using statements:
   using Microsoft.EntityFrameworkCore;
   using {project_name}.Data;
   using {project_name}.Models;
-  // Also add: using Microsoft.AspNetCore.Mvc.Rendering;  if this entity has FK dropdowns
+  // Also add: using Microsoft.AspNetCore.Mvc.Rendering;  if entity has FK dropdowns
 
 Derive controller name from Task 1's MIGRATION MAPPING TABLE.
 For each legacy .aspx page, generate a controller with these actions:
 
   GET  Index()            → return all records: await _context.Entities.ToListAsync()
-                            If entity has FK navigation: .Include(e => e.RelatedEntity)
   GET  Details(int id)    → FindAsync(id), return NotFound() if null
-  GET  Create()           → If entity has FK: populate ViewBag dropdown; return View()
+  GET  Create()           → populate ViewBag dropdown if FK; return View()
   POST Create(Model m)    → [ValidateAntiForgeryToken], ModelState.IsValid check,
-                            set any auto-fields (e.g., CreatedAt = DateTime.UtcNow),
                             _context.Add(m), await _context.SaveChangesAsync(),
                             return RedirectToAction(nameof(Index))
-                            On invalid: repopulate ViewBag if needed, return View(m)
-  GET  Edit(int id)       → FindAsync(id), NotFound() if null, populate ViewBag if needed
+  GET  Edit(int id)       → FindAsync(id), NotFound() if null, populate ViewBag if FK
   POST Edit(int id, Model m) → [ValidateAntiForgeryToken], ModelState.IsValid check,
                             _context.Update(m), await _context.SaveChangesAsync(),
                             return RedirectToAction(nameof(Index))
-                            On invalid: repopulate ViewBag, return View(m)
   GET  Delete(int id)     → FindAsync(id) or FirstOrDefaultAsync with Include for FK display
-  POST DeleteConfirmed(int id) → [ValidateAntiForgeryToken], FindAsync(id), Remove, SaveChangesAsync,
-                                 return RedirectToAction(nameof(Index))
+  POST DeleteConfirmed(int id) → [ValidateAntiForgeryToken], FindAsync(id), Remove,
+                                 SaveChangesAsync, return RedirectToAction(nameof(Index))
 
-All DB calls MUST be async (ToListAsync, FindAsync, FirstOrDefaultAsync, SaveChangesAsync).
-Inject AppDbContext via constructor — never use new AppDbContext().
-Use NotFound() (not HttpNotFound()).
+All DB calls MUST be async. Inject AppDbContext via constructor only.
 
 ── {output_path}/Views/{{EntityName}}s/  [four views per entity] ──
-Generate all four views for EACH entity:
-
-  Index.cshtml:
-    Bootstrap 5 table. One column per entity property.
-    For FK properties: show the related entity's display name (e.g., Category.Name).
-    Action links: Edit | Details | Delete (using asp-action, asp-controller, asp-route-id).
-    "Create New" link at top.
-
-  Create.cshtml:
-    <form asp-action="Create" method="post">
-    One <input asp-for="PropertyName"> per property (skip Id and auto-set fields).
-    For FK: <select asp-for="FKId" asp-items="ViewBag.RelatedItems">
-              <option value="">-- Select --</option>
-            </select>
-    <span asp-validation-for="PropertyName"> for each field.
-    Submit button.
-
-  Edit.cshtml:
-    Same as Create but includes <input type="hidden" asp-for="Id">.
-    FK select must pre-select the current value.
-
-  Delete.cshtml:
-    Display all entity properties in a definition list.
-    For FK: show related entity's name.
-    Confirm form: <form asp-action="DeleteConfirmed" method="post">
-                    <input type="hidden" asp-for="Id">
-                    <button type="submit">Delete</button>
-                  </form>
-    Cancel link back to Index.
+  Index.cshtml:    Bootstrap 5 table, one column per property, action links Edit|Details|Delete
+  Create.cshtml:   <form asp-action="Create">, <input asp-for="...">, <select asp-for="..."> for FK
+  Edit.cshtml:     Same as Create with <input type="hidden" asp-for="Id">
+  Delete.cshtml:   Display properties, confirm form with asp-action="DeleteConfirmed"
 
 ── {output_path}/Views/Shared/_Layout.cshtml ──
-Bootstrap 5 CDN (CSS + JS bundle from cdn.jsdelivr.net/npm/bootstrap@5).
-Nav bar: app title on left, one nav link per controller on right.
-@RenderBody()
-@await RenderSectionAsync("Scripts", required: false)
+Bootstrap 5 CDN. Nav bar: app title left, one nav link per controller right.
 
 ── {output_path}/Views/_ViewImports.cshtml ──
 @using {project_name}
@@ -350,79 +325,73 @@ Nav bar: app title on left, one nav link per controller on right.
 HARD RULES — zero exceptions
 ═══════════════════════════════════════════════════════════════════════
 - ZERO references to: System.Web, System.Data.SqlClient, System.Configuration,
-  System.Web.UI, System.Web.UI.WebControls, HttpContext.Current, IsPostBack,
-  Page_Load, Response.Redirect, Request.QueryString, Web.config
+  System.Web.UI, HttpContext.Current, IsPostBack, Page_Load, Response.Redirect,
+  Request.QueryString, Web.config
 - All DB access async — no synchronous SaveChanges/Find/ToList
 - DbContext injected via constructor only
 - All POST actions must have [ValidateAntiForgeryToken]
 - All POST actions must return RedirectToAction on success
-- Every .cs file must have its required using statements
 - Views must use tag helpers (asp-*), NOT Html.BeginForm / Html.TextBoxFor / Html.ActionLink
 
 ═══════════════════════════════════════════════════════════════════════
 HOW TO WRITE FILES
 ═══════════════════════════════════════════════════════════════════════
 Use write_batch_files to write ALL generated files in ONE single call.
-Pass a list where each item has "path" and "content":
-  [{{"path": "{output_path}/Program.cs", "content": "...full file content..."}},
-   {{"path": "{output_path}/Models/EntityName.cs", "content": "..."}}, ...]
-
-Do NOT use write_file for individual files — one batch call only.
 
 ═══════════════════════════════════════════════════════════════════════
 AFTER WRITING FILES — run in this order
 ═══════════════════════════════════════════════════════════════════════
 Step A — Restore NuGet packages:
   run_command: dotnet restore "{output_path}/{project_name}.csproj"
-  If FAIL: report the exact error output.
 
 Step B — Build to confirm all using statements compile:
   run_command: dotnet build "{output_path}/{project_name}.csproj"
-  If FAIL: report the exact compiler error with file name and line number.
-  A successful build confirms all NuGet packages installed and all namespaces resolve.
+  Report exact compiler error with file name and line number if FAIL.
 
 Step C — Create solution file and add main project:
   run_command: dotnet new sln --name "{project_name}" --output "{solution_dir}" --force
   run_command: dotnet sln "{solution_path}" add "{output_path}/{project_name}.csproj"
         """,
-        expected_output=f"""
-A list of every file written, grouped by folder.
-The list must include: .csproj, appsettings.json, Program.cs, AppDbContext.cs,
-one Model file per entity, one Controller file per entity, four View files per entity,
-_Layout.cshtml, _ViewImports.cshtml, _ViewStart.cshtml.
-
-NuGet restore result: SUCCESS or FAIL (with full error if failed).
-Build result: SUCCESS or FAIL (with compiler error, file, and line number if failed).
-Solution file created at: {solution_path}
-        """,
         expected_output=(
-            "Confirmation that every file was written successfully. "
-            "List each file path on its own line with a one-line description of its content."
+            "Confirmation that every file was written. "
+            "List each file path with a one-line description. "
+            "NuGet restore result: SUCCESS or FAIL. "
+            "Build result: SUCCESS or FAIL (with compiler error if failed). "
+            f"Solution file created at: {solution_path}"
         ),
         agent=agent,
-        output_file=output_file,
+        **kwargs,
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Task 3 — Write and Run xUnit Tests
-# Agent: Tester
-# Prior context needed: summary of Task 2 (which files were written)
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Task 3 — Test ────────────────────────────────────────────────────────────
 
 def build_test_task(
     agent,
     output_path: str,
-    prior_migrate_summary: str,
-    output_file: str,
+    prior_migrate_summary: str = "",
+    output_file: str | None = None,
+    context: list | None = None,
 ) -> Task:
-    project_name = output_path.rstrip("/\\").replace("\\", "/").split("/")[-1]
+    """Write and run xUnit tests for all generated controllers."""
+    project_name, solution_dir, solution_path = _solution_paths(output_path)
+    kwargs = {}
+    if output_file:
+        kwargs["output_file"] = output_file
+    if context:
+        kwargs["context"] = context
+
+    prior_context = (
+        f"\n═══ SUMMARY FROM TASK 2 (MIGRATE) ═══\n{prior_migrate_summary}\n"
+        if prior_migrate_summary
+        else ""
+    )
 
     return Task(
         description=f"""
 Write xUnit tests for the migrated .NET Core 8 project at: {output_path}
 Then run them and report results.
-
+{prior_context}
 ═══ STEP 1: Discover what was generated ═══
 Call list_files on "{output_path}" to get every file path.
 Call read_multiple_files on all Controller files and Model files found.
@@ -471,8 +440,7 @@ Helper to create an in-memory DbContext (use for all tests):
           .UseInMemoryDatabase(Guid.NewGuid().ToString())
           .Options);
 
-For EACH controller discovered in Step 1, write these 7 tests
-(replace EntityName with the actual entity name, e.g., Product, Category):
+For EACH controller discovered in Step 1, write these 7 tests:
   [Fact] {{EntityName}}_Index_Returns_All_Items()
   [Fact] {{EntityName}}_Create_GET_Returns_ViewResult()
   [Fact] {{EntityName}}_Create_POST_Valid_Saves_And_Redirects()
@@ -481,60 +449,48 @@ For EACH controller discovered in Step 1, write these 7 tests
   [Fact] {{EntityName}}_Edit_POST_Valid_Updates_And_Redirects()
   [Fact] {{EntityName}}_Delete_POST_Removes_And_Redirects()
 
-For any entity that has a required FK (e.g., Product requires a Category):
-  Seed the parent entity before testing the child:
-    context.ParentEntities.Add(new ParentEntity {{ Id = 1, Name = "Test" }});
-    context.SaveChanges();
-
-Total tests = 7 × (number of controllers generated).
+For any entity with a required FK, seed the parent before testing the child.
 
 ═══ STEP 3: Install packages and add test project to solution ═══
 Step 3a: run_command: dotnet restore "{output_path}.Tests/{project_name}.Tests.csproj"
-  If FAIL: report the exact error. Do NOT continue.
 Step 3b: run_command: dotnet sln "{solution_path}" add "{output_path}.Tests/{project_name}.Tests.csproj"
 Step 3c: run_command: dotnet build "{output_path}.Tests/{project_name}.Tests.csproj"
-  If FAIL: report exact compiler error. Do NOT continue to step 4.
 
 ═══ STEP 4: Run tests ═══
   run_command: dotnet test "{output_path}.Tests/{project_name}.Tests.csproj" --logger "console;verbosity=detailed"
-  Capture the full output.
 
 ═══ STEP 5: Report ═══
-For each test: PASS or FAIL.
-For FAIL: exact exception message and the failing line.
+For each test: PASS or FAIL. For FAIL: exact exception message and failing line.
 Summary: "X / Y tests passed"
 Final recommendation: READY FOR REVIEW or NEEDS FIXES
-If NEEDS FIXES: list exactly what the Developer must change, file by file.
-        """,
-        expected_output="""
-Test report with:
-- List of all test files written and their paths
-- dotnet restore result: PASS or FAIL
-- dotnet build result: PASS or FAIL (with compiler error if failed)
-- Each test name and result: PASS or FAIL
-- For FAIL: exact exception and failing line
-- Summary: "X / Y tests passed"
-- Final recommendation: READY FOR REVIEW or NEEDS FIXES
         """,
         expected_output=(
             "Test report listing each test name with PASS or FAIL. "
             "For FAIL: exact exception message and line that failed. "
-            "Summary line: 'X/7 tests passed'. "
+            "Summary line: 'X/Y tests passed'. "
             "Final line: READY FOR REVIEW or NEEDS FIXES "
             "(if NEEDS FIXES: bullet list of what the Developer must change)."
         ),
         agent=agent,
-        output_file=output_file,
+        **kwargs,
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Task 4 — Code Review
-# Agent: Critic
-# Prior context needed: none — Critic reads the output files directly via tools
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Task 4 — Review ──────────────────────────────────────────────────────────
 
-def build_review_task(agent, output_path: str, output_file: str) -> Task:
+def build_review_task(
+    agent,
+    output_path: str,
+    output_file: str | None = None,
+    context: list | None = None,
+) -> Task:
+    """Score the migrated code 0–100 against a quality rubric."""
+    kwargs = {}
+    if output_file:
+        kwargs["output_file"] = output_file
+    if context:
+        kwargs["context"] = context
+
     return Task(
         description=f"""
 Review the entire migrated .NET Core 8 project at: {output_path}
@@ -584,15 +540,6 @@ LOW (-2 each):
 
 For each issue: report the file name and the specific line/pattern that is wrong.
         """,
-        expected_output="""
-Structured code review:
-- SCORE: X/100
-- HIGH SEVERITY ISSUES: file + description for each
-- MEDIUM SEVERITY ISSUES: file + description for each
-- LOW SEVERITY ISSUES: file + description for each
-- VERDICT: APPROVED (score >= 80) or NEEDS REVISION (score < 80)
-- If NEEDS REVISION: ordered fix list (most critical first)
-        """,
         expected_output=(
             "Structured code review: "
             "SCORE: X/100. "
@@ -603,21 +550,44 @@ Structured code review:
             "If NEEDS REVISION: ordered fix list for the Developer."
         ),
         agent=agent,
-        output_file=output_file,
+        **kwargs,
     )
 
-    # ──────────────────────────────────────────────
-    # Task 5 — Manager Final Report
-    # Agent: Manager
-    # ──────────────────────────────────────────────
-    task_report = Task(
-        description="""
-You are the Migration Project Manager. Synthesize the four reports:
-  - Task 1: Migration Analysis (Developer)
-  - Task 2: Migration Output — files written, build result (Developer)
-  - Task 3: Test Results (Tester)
-  - Task 4: Code Review Score (Critic)
 
+# ── Task 5 — Report ──────────────────────────────────────────────────────────
+
+def build_report_task(
+    agent,
+    output_path: str,
+    prior_analyze_summary: str = "",
+    prior_migrate_summary: str = "",
+    prior_test_summary: str = "",
+    prior_review_summary: str = "",
+    output_file: str | None = None,
+    context: list | None = None,
+) -> Task:
+    """Synthesize all prior reports and issue COMPLETE / INCOMPLETE verdict."""
+    kwargs = {}
+    if output_file:
+        kwargs["output_file"] = output_file
+    if context:
+        kwargs["context"] = context
+
+    summaries = ""
+    if prior_analyze_summary:
+        summaries += f"\n═══ ANALYZE SUMMARY ═══\n{prior_analyze_summary}\n"
+    if prior_migrate_summary:
+        summaries += f"\n═══ MIGRATE SUMMARY ═══\n{prior_migrate_summary}\n"
+    if prior_test_summary:
+        summaries += f"\n═══ TEST SUMMARY ═══\n{prior_test_summary}\n"
+    if prior_review_summary:
+        summaries += f"\n═══ REVIEW SUMMARY ═══\n{prior_review_summary}\n"
+
+    return Task(
+        description=f"""
+You are the Migration Project Manager. Synthesize the four task reports below
+and issue a final verdict.
+{summaries}
 PASS criteria (ALL must be met for STATUS: COMPLETE):
   ✅ dotnet build in Task 2 succeeded
   ✅ Code Review Score >= 80/100
@@ -634,22 +604,59 @@ then test failures, then review issues).
 Always include the section: WHAT NEEDS MANUAL HUMAN REVIEW
   - Production connection strings (server, credentials)
   - Windows Authentication or Active Directory setup
-  - Any Session state usage converted to TempData (verify behaviour is equivalent)
-  - Any custom HTTP modules that were removed (check if functionality is needed)
-  - EF Core migrations must be run before first deployment (dotnet ef migrations add / update)
-  - Any third-party libraries from packages.config that have no .NET Core equivalent
+  - Session state usage converted to TempData (verify behaviour is equivalent)
+  - Custom HTTP modules that were removed (check if functionality is needed)
+  - EF Core migrations must be run before first deployment
+  - Third-party libraries from packages.config with no .NET Core equivalent
         """,
-        expected_output="""
-Final Migration Report:
-- STATUS: COMPLETE or INCOMPLETE
-- MIGRATION SCORE: X% overall
-- ENTITIES MIGRATED: list each entity
-- CONTROLLERS GENERATED: list each controller
-- BUILD RESULT: PASS or FAIL
-- TEST RESULTS: X / Y passed
-- ISSUES REMAINING: list (empty if COMPLETE)
-- WHAT NEEDS MANUAL HUMAN REVIEW: always present regardless of status
-        """,
-        agent=manager,
+        expected_output=(
+            "Final Migration Report with: "
+            "STATUS: COMPLETE or INCOMPLETE. "
+            "MIGRATION SCORE: X% overall. "
+            "ENTITIES MIGRATED: list. "
+            "CONTROLLERS GENERATED: list. "
+            "BUILD RESULT: PASS or FAIL. "
+            "TEST RESULTS: X / Y passed. "
+            "ISSUES REMAINING (empty if COMPLETE). "
+            "WHAT NEEDS MANUAL HUMAN REVIEW (always present)."
+        ),
+        agent=agent,
+        **kwargs,
+    )
+
+
+# ── Backward-compatible wrapper (used by tests + old sequential crew) ─────────
+
+def create_tasks(agents: dict, legacy_path: str, output_path: str) -> list[Task]:
+    """
+    Builds and returns all 5 tasks in execution order.
+    Used by the sequential Crew approach and by the test suite.
+    For the mini-crew approach, call build_*_task() directly.
+    """
+    task_analyze = build_analyze_task(
+        agent=agents["developer"],
+        legacy_path=legacy_path,
+    )
+    task_migrate = build_migrate_task(
+        agent=agents["developer"],
+        legacy_path=legacy_path,
+        output_path=output_path,
+        context=[task_analyze],
+    )
+    task_test = build_test_task(
+        agent=agents["tester"],
+        output_path=output_path,
+        context=[task_migrate],
+    )
+    task_review = build_review_task(
+        agent=agents["critic"],
+        output_path=output_path,
+        context=[task_migrate],
+    )
+    task_report = build_report_task(
+        agent=agents["manager"],
+        output_path=output_path,
         context=[task_analyze, task_migrate, task_test, task_review],
     )
+
+    return [task_analyze, task_migrate, task_test, task_review, task_report]

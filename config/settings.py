@@ -79,6 +79,7 @@ class MigrationConfig(BaseSettings):
     llm_max_tokens: int = 8192                            # LLM_MAX_TOKENS — max tokens per response
     use_memory: bool = False                              # USE_MEMORY — enables CrewAI shared memory (costs extra embedding tokens)
     verbose: bool = True                           # VERBOSE
+    checkpoint_dir: str = "./output/.checkpoints"  # CHECKPOINT_DIR — where per-task outputs are saved
 
     # ── Pydantic-settings configuration ────────────────────────────────
     model_config = SettingsConfigDict(
