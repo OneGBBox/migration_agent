@@ -134,8 +134,11 @@ The legacy project has at least: Category and Product (with Category foreign key
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="8.0.0" />
   </ItemGroup>
 </Project>
 
@@ -154,11 +157,16 @@ Must include in this order:
   app.MapControllerRoute(name: "default", pattern: "{{controller=Products}}/{{action=Index}}/{{id?}}")
 
 ── {output_path}/Data/AppDbContext.cs ──
+Required using statements at the top of the file:
+  using Microsoft.EntityFrameworkCore;
+  using {project_name}.Models;
 EF Core 8 DbContext. Constructor takes DbContextOptions<AppDbContext>.
 DbSet for EACH model (Category AND Product).
 OnModelCreating: configure Product.Price as decimal(18,2).
 
 ── {output_path}/Models/Category.cs ──
+Required using statements at the top of the file:
+  using System.ComponentModel.DataAnnotations;
 public class Category {{
     public int Id {{ get; set; }}
     [Required][StringLength(100)] public string Name {{ get; set; }} = string.Empty;
@@ -167,6 +175,9 @@ public class Category {{
 }}
 
 ── {output_path}/Models/Product.cs ──
+Required using statements at the top of the file:
+  using System.ComponentModel.DataAnnotations;
+  using System.ComponentModel.DataAnnotations.Schema;
 public class Product {{
     public int Id {{ get; set; }}
     [Required][StringLength(200)] public string Name {{ get; set; }} = string.Empty;
@@ -179,6 +190,11 @@ public class Product {{
 }}
 
 ── {output_path}/Controllers/CategoriesController.cs ──
+Required using statements at the top of the file:
+  using Microsoft.AspNetCore.Mvc;
+  using Microsoft.EntityFrameworkCore;
+  using {project_name}.Data;
+  using {project_name}.Models;
 Constructor injects AppDbContext. All actions are async.
   Index()              GET  → _context.Categories.ToListAsync()
   Create()             GET  → return View()
@@ -190,6 +206,12 @@ Constructor injects AppDbContext. All actions are async.
 All POST actions: [ValidateAntiForgeryToken]. Use NotFound() not HttpNotFound().
 
 ── {output_path}/Controllers/ProductsController.cs ──
+Required using statements at the top of the file:
+  using Microsoft.AspNetCore.Mvc;
+  using Microsoft.AspNetCore.Mvc.Rendering;
+  using Microsoft.EntityFrameworkCore;
+  using {project_name}.Data;
+  using {project_name}.Models;
 Constructor injects AppDbContext. All actions are async.
   Index()              GET  → _context.Products.Include(p => p.Category).ToListAsync()
   Create()             GET  → ViewBag.Categories = new SelectList(await _context.Categories.ToListAsync(), "Id", "Name")
@@ -242,6 +264,11 @@ Bootstrap 5 CDN. Nav bar with links to /Products and /Categories.
 ── {output_path}/Views/_ViewStart.cshtml ──
 @{{ Layout = "_Layout"; }}
 
+── {output_path}/Program.cs ──
+Required using statements at the top of the file:
+  using Microsoft.EntityFrameworkCore;
+  using {project_name}.Data;
+
 RULES — no exceptions:
 - Zero System.Web, System.Data.SqlClient, or System.Configuration references
 - Zero HttpContext.Current, IsPostBack, Page_Load, Response.Redirect
@@ -249,11 +276,21 @@ RULES — no exceptions:
 - All DB calls async: ToListAsync, FindAsync, FirstOrDefaultAsync, SaveChangesAsync
 - DbContext injected via constructor only — never new AppDbContext()
 - Use Include() for navigation properties in Index and Delete views
+- Every .cs file MUST include its required using statements listed above
+
+AFTER writing all files, run these commands to install NuGet packages:
+Step A: run_command: dotnet restore "{output_path}/{project_name}.csproj"
+  If restore fails: report the exact error.
+Step B: run_command: dotnet build "{output_path}/{project_name}.csproj"
+  If build fails: report the exact compiler error (file + line number).
+  A successful build confirms all NuGet packages are installed and all using statements resolve.
         """,
         expected_output="""
 Confirmation that every file listed above was written successfully.
 Print each file path on its own line, grouped by folder.
 Confirm: CategoriesController, ProductsController, all 8 views, _Layout, _ViewImports, _ViewStart.
+NuGet restore result: SUCCESS or FAIL (with error if failed).
+Build result: SUCCESS or FAIL (with compiler error if failed).
         """,
         agent=developer,
         context=[task_analyze],
@@ -274,10 +311,18 @@ Steps:
 3. Use write_batch_files to write BOTH test files in one call (list of {{path, content}} objects):
 
    File 1: {output_path}.Tests/{project_name}.Tests.csproj
-   Must reference:
-     xunit (2.6.0+), Microsoft.NET.Test.Sdk, xunit.runner.visualstudio,
-     Microsoft.EntityFrameworkCore.InMemory, Microsoft.AspNetCore.Mvc (for IActionResult)
+   Must reference these NuGet packages:
+     xunit (2.6.0+), Microsoft.NET.Test.Sdk (17.8.0+), xunit.runner.visualstudio (2.5.0+),
+     Microsoft.EntityFrameworkCore.InMemory (8.0.0), coverlet.collector (6.0.0)
    Must ProjectReference: ../{project_name}/{project_name}.csproj
+
+   File 2 required using statements at the top of CrudControllerTests.cs:
+     using Microsoft.EntityFrameworkCore;
+     using Microsoft.AspNetCore.Mvc;
+     using {project_name}.Controllers;
+     using {project_name}.Data;
+     using {project_name}.Models;
+     using Xunit;
 
    File 2: {output_path}.Tests/CrudControllerTests.cs
    Use InMemory DB (no real SQL Server needed):
@@ -309,8 +354,10 @@ Steps:
      [Fact] Products_Edit_POST_Valid_Updates_And_Redirects()
      [Fact] Products_Delete_POST_Removes_And_Redirects()
 
-4. Run dotnet build FIRST to catch compile errors before running tests:
-   run_command: dotnet build "{output_path}/{project_name}.csproj"
+4. Install NuGet packages and build:
+   Step 4a: run_command: dotnet restore "{output_path}.Tests/{project_name}.Tests.csproj"
+   If restore FAILS: report the exact error. Do NOT proceed.
+   Step 4b: run_command: dotnet build "{output_path}/{project_name}.csproj"
    If build FAILS: report the exact compiler error. Do NOT proceed to dotnet test.
    If build SUCCEEDS: proceed to step 5.
 

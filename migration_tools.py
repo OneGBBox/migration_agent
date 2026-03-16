@@ -220,7 +220,31 @@ class WriteBatchFilesTool(BaseTool):
     )
     args_schema: Type[BaseModel] = WriteBatchFilesInput
 
-    def _run(self, files: list) -> str:
+    def _run(self, *args, **kwargs) -> str:
+        import json
+
+        # CrewAI 1.9.3 may call _run() in multiple ways:
+        #   _run([{...}])           — positional list (direct / test calls)
+        #   _run(files=[{...}])     — keyword after schema validation
+        #   _run('{"files":[...]}') — raw JSON string from the LLM output
+        #   _run({'files':[...]})   — raw dict
+        if args:
+            raw = args[0]
+            if isinstance(raw, str):
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    return f"ERROR: Invalid JSON input: {raw[:200]}"
+                files = data.get("files", data) if isinstance(data, dict) else data
+            elif isinstance(raw, list):
+                files = raw
+            elif isinstance(raw, dict):
+                files = raw.get("files", [])
+            else:
+                files = []
+        else:
+            files = kwargs.get("files", [])
+
         results = []
         for entry in files:
             # Handle both FileEntry instances (from CrewAI validation)
