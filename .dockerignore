@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local outputs and checkpoints (not needed in image)
+output/
+*.log
+logs/
+
+# Secrets — NEVER bake into the image
+.env
+
+# Dev tooling
+.vscode/
+.idea/
+.uv/
+
+# Git
+.git/
+.gitignore
+
+# Vercel
+.vercel/
